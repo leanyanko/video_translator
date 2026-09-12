@@ -1,0 +1,41 @@
+# ── Project-specific ────────────────────────────────────────────────
+# Python virtualenv (~7 GB: torch, fish-speech deps) — recreate via README
+venv/
+
+# Fish Speech model weights (~3.3 GB, gated on HF; CC-BY-NC-SA license
+# likely forbids redistribution) — download via `hf download`, see README
+checkpoints/
+
+# Upstream fish-speech clone, pinned to commit 781bf1c — cloned separately,
+# never vendored (see README note about the pin)
+fish-speech/
+
+# Per-video working data: downloaded videos, extracted audio, transcripts,
+# per-segment TTS output, final dubs. Regenerable and multi-GB per episode.
+work/
+
+# Loose media experiments (smoke tests, sample clips)
+*.wav
+*.mp3
+*.mp4
+
+# ── Python ──────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Secrets (belt and suspenders — never commit credentials) ────────
+.env
+.env.*
+*.token
+*_key*
+*.pem
+
+# ── OS / editor noise ───────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
