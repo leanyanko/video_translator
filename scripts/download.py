@@ -20,7 +20,9 @@ video = work / "video.mp4"
 if not video.exists():
     subprocess.check_call([
         YTDLP,
-        "-f", "bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4]/b",
+        # prefer H.264 (avc1) so QuickTime can play the output directly;
+        # fall back to any mp4 video (may be VP9 — needs re-encode for QT)
+        "-f", "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4]/b",
         "--merge-output-format", "mp4",
         "-o", str(video),
         url,

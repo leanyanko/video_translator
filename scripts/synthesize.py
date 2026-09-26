@@ -23,10 +23,20 @@ work = Path(sys.argv[1])
 limit_secs = None
 if "--limit-secs" in sys.argv:
     limit_secs = float(sys.argv[sys.argv.index("--limit-secs") + 1])
+if "--url" in sys.argv:
+    URL = sys.argv[sys.argv.index("--url") + 1]
+outdir_name = "tts"
+if "--outdir" in sys.argv:
+    outdir_name = sys.argv[sys.argv.index("--outdir") + 1]
+
+min_secs = 0.0
+if "--min-secs" in sys.argv:
+    min_secs = float(sys.argv[sys.argv.index("--min-secs") + 1])
 
 segments = json.loads((work / "segments_ru.json").read_text())["segments"]
 if limit_secs is not None:
     segments = [s for s in segments if s["start"] < limit_secs]
+segments = [s for s in segments if s["start"] >= min_secs]
 
 refs = {}
 for f in (work / "refs").glob("*.wav"):
@@ -35,7 +45,7 @@ for f in (work / "refs").glob("*.wav"):
         "text": (work / "refs" / f"{f.stem}.txt").read_text().strip(),
     }
 
-outdir = work / "tts"
+outdir = work / outdir_name
 outdir.mkdir(exist_ok=True)
 
 todo = [s for s in segments if not (outdir / f"seg_{s['id']:04d}.wav").exists()]

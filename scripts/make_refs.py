@@ -11,12 +11,18 @@ import subprocess
 import sys
 from pathlib import Path
 
-MIN_SECS, MAX_SECS = 8.0, 20.0
+MIN_SECS, MAX_SECS = 6.0, 20.0
 MAX_GAP = 0.5
 
 work = Path(sys.argv[1])
+if "--max-secs" in sys.argv:
+    MAX_SECS = float(sys.argv[sys.argv.index("--max-secs") + 1])
+    MIN_SECS = min(MIN_SECS, MAX_SECS / 2)
+refs_name = (
+    sys.argv[sys.argv.index("--outdir") + 1] if "--outdir" in sys.argv else "refs"
+)
 data = json.loads((work / "segments.json").read_text())
-refs_dir = work / "refs"
+refs_dir = work / refs_name
 refs_dir.mkdir(exist_ok=True)
 
 for spk in data["speakers"]:
@@ -31,9 +37,11 @@ for spk in data["speakers"]:
             and segs[j + 1]["end"] - segs[i]["start"] <= MAX_SECS
         ):
             j += 1
-        dur = min(segs[j]["end"], segs[i]["start"] + MAX_SECS) - segs[i]["start"]
-        if best is None or dur > best[0]:
-            best = (dur, segs[i]["start"], min(segs[j]["end"], segs[i]["start"] + MAX_SECS),
+        dur = segs[j]["end"] - segs[i]["start"]
+        # audio and text must cover exactly the same span — never clip
+        # audio mid-segment, skip runs that exceed the cap instead
+        if dur <= MAX_SECS and (best is None or dur > best[0]):
+            best = (dur, segs[i]["start"], segs[j]["end"],
                     [s["text"] for s in segs[i : j + 1]])
         i = j + 1
 

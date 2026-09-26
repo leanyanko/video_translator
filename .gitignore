@@ -1,6 +1,7 @@
 # ── Project-specific ────────────────────────────────────────────────
 # Python virtualenv (~7 GB: torch, fish-speech deps) — recreate via README
 venv/
+venv-f5/
 
 # Fish Speech model weights (~3.3 GB, gated on HF; CC-BY-NC-SA license
 # likely forbids redistribution) — download via `hf download`, see README
@@ -9,6 +10,8 @@ checkpoints/
 # Upstream fish-speech clone, pinned to commit 781bf1c — cloned separately,
 # never vendored (see README note about the pin)
 fish-speech/
+# main-branch worktree of the same repo (needed for the S2-Pro server)
+fish-speech-main/
 
 # Per-video working data: downloaded videos, extracted audio, transcripts,
 # per-segment TTS output, final dubs. Regenerable and multi-GB per episode.
