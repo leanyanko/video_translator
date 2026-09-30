@@ -26,9 +26,11 @@ venv/bin/python scripts/transcribe.py work/<id>
 #     and hf.co/pyannote/segmentation-3.0)
 venv/bin/python scripts/diarize.py work/<id> [max_speakers]
 
-# 4. translate: produce work/<id>/segments_ru.json
-#    (same shape as segments.json plus a "text_ru" field per segment;
-#    Claude does this step in-session)
+# 4. translate: Claude produces translation maps (segment id → Russian
+#    text) in-session and applies each chunk with:
+#      venv/bin/python scripts/apply_translation.py work/<id> <chunk.json>
+#    This writes/merges segments_ru.json AND saves work/<id>/transcripts/
+#    right away — transcripts are captured at translation time.
 
 # 5. voice reference per speaker → refs/<SPEAKER>.wav + .txt
 venv/bin/python scripts/make_refs.py work/<id>
@@ -47,8 +49,8 @@ venv/bin/python scripts/synthesize.py work/<id>
 # 8. time-fit, place on timeline, mux → work/<id>/video_ru.mp4
 venv/bin/python scripts/assemble.py work/<id>
 
-# 9. export transcripts (EN+RU, full text + per-segment JSON)
-#    → work/<id>/transcripts/{transcript,segments}_{en,ru}.*
+# (transcripts are saved automatically: EN after step 3, EN+RU on every
+#  apply_translation.py run. To re-export manually:)
 venv/bin/python scripts/export_transcripts.py work/<id> [work/<id2> ...]
 ```
 

@@ -83,3 +83,8 @@ out = {"language": raw.get("language"), "speakers": speakers, "segments": segmen
 
 counts = {spk: sum(1 for s in segments if s["speaker"] == spk) for spk in speakers}
 print(f"final segments={len(segments)} per-speaker counts={counts}")
+
+# save the English transcript as soon as the final segments exist
+from export_transcripts import export_work  # noqa: E402
+
+export_work(work)

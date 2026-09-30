@@ -38,8 +38,8 @@ def write_transcript(segments, text_key: str, path: Path) -> bool:
     return True
 
 
-for arg in sys.argv[1:]:
-    work = Path(arg)
+def export_work(work: Path) -> None:
+    """Export transcripts for every language whose segment file exists."""
     out = work / "transcripts"
     print(f"== {work.name}")
 
@@ -58,3 +58,8 @@ for arg in sys.argv[1:]:
             print(f"  {txt_name} + {json_name} ({len(segments)} segments)")
         else:
             print(f"  {src} lacks '{text_key}' texts — skipped")
+
+
+if __name__ == "__main__":
+    for arg in sys.argv[1:]:
+        export_work(Path(arg))
