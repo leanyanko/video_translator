@@ -14,6 +14,15 @@ Runs fully locally on Apple Silicon (MPS).
 
 ## Per-video flow
 
+One command (resumable; stops once for the translation step and tells you
+how to continue):
+
+```bash
+venv/bin/python scripts/run_pipeline.py "<youtube-url>"
+```
+
+Or step by step:
+
 ```bash
 # 1. download video + audio → prints WORKDIR=work/<id>
 venv/bin/python scripts/download.py "<youtube-url>"
