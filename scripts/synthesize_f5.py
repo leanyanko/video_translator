@@ -80,40 +80,8 @@ accents = json.loads(accents_path.read_text()) if accents_path.exists() else {}
 
 tts = F5TTS(model="F5TTS_v1_Base", ckpt_file=str(CKPT), vocab_file=str(VOCAB))
 
-# F5's multi-batch generation hangs/segfaults on MPS (torch 2.14), so
-# split long texts at punctuation into pieces short enough to stay
-# single-batch, synthesize each, and concatenate.
-# NB: F5 budgets text in UTF-8 BYTES (Cyrillic = 2 bytes/char), so the
-# cap is in bytes, well under its ~190-byte batch threshold for 11s refs
-MAX_PIECE_BYTES = 150
-
-
-def _blen(s: str) -> int:
-    return len(s.encode("utf-8"))
-
-
-def split_single_batch(text: str) -> list[str]:
-    import re
-
-    parts = re.split(r"(?<=[.!?…;]) +", text)
-    pieces, cur = [], ""
-    for p in parts:
-        if cur and _blen(cur) + 1 + _blen(p) > MAX_PIECE_BYTES:
-            pieces.append(cur)
-            cur = p
-        else:
-            cur = f"{cur} {p}".strip()
-        # a single sentence longer than the cap gets split at commas/dashes
-        while _blen(cur) > MAX_PIECE_BYTES:
-            limit = len(cur.encode("utf-8")[:MAX_PIECE_BYTES].decode("utf-8", "ignore"))
-            cut = max(cur.rfind(c, 0, limit) for c in ",—:")
-            if cut <= 0:
-                cut = limit
-            pieces.append(cur[: cut + 1].strip())
-            cur = cur[cut + 1 :].strip()
-    if cur:
-        pieces.append(cur)
-    return [p for p in pieces if p]
+# split long texts into single-batch pieces (see text_split.py for why)
+from text_split import split_single_batch
 
 
 import numpy as np
