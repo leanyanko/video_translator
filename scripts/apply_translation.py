@@ -30,22 +30,26 @@ if unknown:
     sys.exit(f"ERROR: translation ids not in segments.json: {sorted(unknown)[:10]}")
 
 ru_path = work / "segments_ru.json"
-existing = {}
+prior = {}  # full prior segment dicts — they may carry hand edits
 extra = []  # segments added by hand (splits) that aren't in segments.json
 if ru_path.exists():
     for s in json.loads(ru_path.read_text())["segments"]:
         if str(s["id"]) not in base_ids:
             extra.append(s)
-        elif "text_ru" in s:
-            existing[str(s["id"])] = s["text_ru"]
+        else:
+            prior[str(s["id"])] = s
 
-existing.update(translations)
-
-segments = [
-    {**s, "text_ru": existing[str(s["id"])]}
-    for s in base["segments"]
-    if str(s["id"]) in existing
-]
+segments = []
+for s in base["segments"]:
+    sid = str(s["id"])
+    # keep the prior dict verbatim (hand edits to end/text survive);
+    # only fall back to the base segment for ids seen for the first time
+    seg = dict(prior.get(sid, s))
+    if sid in translations:
+        seg["text_ru"] = translations[sid]
+    if "text_ru" in seg:
+        segments.append(seg)
+translated_ids = {str(s["id"]) for s in segments}
 segments = sorted(segments + extra, key=lambda s: s["start"])
 ru_path.write_text(
     json.dumps(
@@ -55,7 +59,7 @@ ru_path.write_text(
     )
 )
 
-missing = len(base_ids) - len(existing)
+missing = len(base_ids) - len(translated_ids)
 print(f"segments_ru.json: {len(segments)} segments"
       + (f", {missing} still untranslated" if missing else " (complete)"))
 export_work(work)
