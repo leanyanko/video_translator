@@ -46,6 +46,10 @@ venv/bin/python scripts/synthesize.py work/<id>
 
 # 8. time-fit, place on timeline, mux → work/<id>/video_ru.mp4
 venv/bin/python scripts/assemble.py work/<id>
+
+# 9. export transcripts (EN+RU, full text + per-segment JSON)
+#    → work/<id>/transcripts/{transcript,segments}_{en,ru}.*
+venv/bin/python scripts/export_transcripts.py work/<id> [work/<id2> ...]
 ```
 
 Notes
