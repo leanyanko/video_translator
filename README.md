@@ -18,36 +18,40 @@ Runs fully locally on Apple Silicon (MPS).
 # 1. download video + audio → prints WORKDIR=work/<id>
 venv/bin/python scripts/download.py "<youtube-url>"
 
-# 2. transcribe with timestamps → work/<id>/segments_raw.json
+# 2. transcribe with WORD timestamps → words.json (+ segments_raw.json)
 venv/bin/python scripts/transcribe.py work/<id>
 
-# 3. diarize + tag speakers + merge → work/<id>/segments.json
-#    (needs accepted conditions on hf.co/pyannote/speaker-diarization-3.1
-#     and hf.co/pyannote/segmentation-3.0)
-venv/bin/python scripts/diarize.py work/<id> [max_speakers]
+# 3. diarize → work/<id>/diarization.json (speaker turns)
+#    (needs accepted conditions on hf.co/pyannote/speaker-diarization-3.1,
+#     hf.co/pyannote/segmentation-3.0 and speaker-diarization-community-1)
+venv/bin/python scripts/diarize.py work/<id>
 
-# 4. translate: Claude produces translation maps (segment id → Russian
+# 4. DEFAULT segmentation: sentence-boundary cuts + word-level speaker
+#    attribution from words.json + diarization.json → segments.json
+venv/bin/python scripts/segment_sentences.py work/<id>
+#    (re-segmenting with other settings reuses words.json — no re-transcribe)
+
+# 5. translate: Claude produces translation maps (segment id → Russian
 #    text) in-session and applies each chunk with:
 #      venv/bin/python scripts/apply_translation.py work/<id> <chunk.json>
 #    This writes/merges segments_ru.json AND saves work/<id>/transcripts/
 #    right away — transcripts are captured at translation time.
 
-# 5. voice reference per speaker → refs/<SPEAKER>.wav + .txt
-venv/bin/python scripts/make_refs.py work/<id>
+# 6. stress marks (separate process — RUAccent deadlocks next to F5)
+venv-f5/bin/python scripts/accent_texts.py work/<id>
 
-# 6. start the TTS server (leave running; loads the model once)
-cd fish-speech && ../venv/bin/python tools/api_server.py \
-  --llama-checkpoint-path ../checkpoints/openaudio-s1-mini \
-  --decoder-checkpoint-path ../checkpoints/openaudio-s1-mini/codec.pth \
-  --decoder-config-name modded_dac_vq \
-  --device mps
+# 7. voice references: ≤11.5s per speaker, text exactly matching the clip
+venv/bin/python scripts/make_refs.py work/<id> --max-secs 11.5 --outdir refs_f5
 
-# 7. synthesize every segment, each with its speaker's cloned voice
-#    (--limit-secs N for a preview sample) → work/<id>/tts/seg_*.wav
-venv/bin/python scripts/synthesize.py work/<id>
+# 8. synthesize (production TTS: F5-TTS Russian; ~19s/segment, resumable;
+#    --only <ids> --seed N for spot repairs) → work/<id>/tts_f5/seg_*.wav
+venv-f5/bin/python scripts/synthesize_f5.py work/<id>
 
-# 8. time-fit, place on timeline, mux → work/<id>/video_ru.mp4
-venv/bin/python scripts/assemble.py work/<id>
+# 9. time-fit, place on timeline, mux → work/<id>/video_ru.mp4
+venv/bin/python scripts/assemble.py work/<id> --tts-dir tts_f5 --out video_ru.mp4
+
+# (legacy Fish Speech s1-mini flow: tools/api_server.py + synthesize.py —
+#  superseded by F5; see scripts' docstrings)
 
 # (transcripts are saved automatically: EN after step 3, EN+RU on every
 #  apply_translation.py run. To re-export manually:)

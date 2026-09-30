@@ -109,38 +109,46 @@ Whisper (mlx-community/whisper-large-v3-turbo) скачается сам при 
 # 1. скачать видео + вытащить аудио → coхраняет WORKDIR=work/<id>
 venv/bin/python scripts/download.py "<youtube-url>"
 
-# 2. транскрипция (Whisper, ~5 мин на 2-часовой эпизод)
+# 2. транскрипция с ПОСЛОВНЫМИ таймкодами → words.json
+#    (Whisper, ~10 мин на 2-часовой эпизод)
 venv/bin/python scripts/transcribe.py work/<id>
 
-# 3. диаризация + сегментация (~15 мин; см. п.2.1 про лицензии)
-#    → segments.json; английская стенограмма сохраняется автоматически
+# 3. диаризация → diarization.json, тайм-линия спикеров
+#    (~15 мин; см. п.2.1 про лицензии)
 venv/bin/python scripts/diarize.py work/<id>
 
-# 4. ПЕРЕВОД — см. раздел 4 ниже. Каждый чанк применяется так:
+# 4. сегментация ПО ПРЕДЛОЖЕНИЯМ (по умолчанию): разрезы только на
+#    границах предложений + пословная привязка спикеров, из words.json
+#    и diarization.json → segments.json; английская стенограмма
+#    сохраняется автоматически. Пересегментация с другими параметрами
+#    переиспользует words.json — Whisper заново не запускается.
+venv/bin/python scripts/segment_sentences.py work/<id>
+
+# 5. ПЕРЕВОД — см. «Правила перевода» ниже. Каждый чанк применяется так:
 venv/bin/python scripts/apply_translation.py work/<id> <chunk.json>
 
-# 5. ударения (обязательно отдельным процессом — RUAccent и F5 в одном
+# 6. ударения (обязательно отдельным процессом — RUAccent и F5 в одном
 #    процессе зависают, см. «Известные особенности окружения» в разделе 1)
 venv-f5/bin/python scripts/accent_texts.py work/<id>
 
-# 6. референсы голосов: ≤11.5 сек на спикера, текст точно совпадает с аудио
+# 7. референсы голосов: ≤11.5 сек на спикера, текст точно совпадает с аудио
 venv/bin/python scripts/make_refs.py work/<id> --max-secs 11.5 --outdir refs_f5
 
-# 7. синтез (долго: ~19 сек/сегмент, 6–9 часов на эпизод; возобновляемый)
+# 8. синтез (долго: ~19 сек/сегмент, 6–9 часов на эпизод; возобновляемый)
 #    на ночь запускать через nohup, чтобы пережил закрытие терминала:
 nohup venv-f5/bin/python scripts/synthesize_f5.py work/<id> > work/<id>/f5_run.log 2>&1 &
 
-# 7б. точечный перегон сегментов после правок (id через запятую):
+# 8б. точечный перегон сегментов после правок (id через запятую):
 venv-f5/bin/python scripts/synthesize_f5.py work/<id> --only 59,341 --seed 7
 
-# 8. (опционально) тембровый проход OpenVoice (~20 мин, CPU) → tts_ov/
+# 9. (опционально) тембровый проход OpenVoice (~20 мин, CPU) → tts_ov/
 /opt/miniconda3/envs/openvoice/bin/python scripts/openvoice_convert.py work/<id>
 
-# 9. сборка дорожки и финальное видео
+# 10. сборка дорожки и финальное видео
 venv/bin/python scripts/assemble.py work/<id> --tts-dir tts_f5 --out video_ru.mp4
 #    (для варианта с OpenVoice: --tts-dir tts_ov --out video_ru_ov.mp4)
 
-# 10. перекодировка для QuickTime (исходники YouTube часто VP9)
+# 11. перекодировка для QuickTime (исходники YouTube часто VP9)
 ffmpeg -i work/<id>/video_ru.mp4 -c:v h264_videotoolbox -b:v 6000k \
   -c:a copy -movflags +faststart work/<id>/video_ru_h264.mp4
 ```

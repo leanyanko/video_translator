@@ -50,6 +50,13 @@ turns = [
 speakers = sorted({t["speaker"] for t in turns})
 print(f"{len(turns)} turns, {len(speakers)} speakers: {speakers}")
 
+# Legacy path: tag/merge transcribe.py's whisper segments if they exist.
+# The DEFAULT pipeline segments with segment_sentences.py instead (word
+# timestamps, sentence-boundary cuts) and only needs diarization.json.
+if not (work / "segments_raw.json").exists():
+    print("no segments_raw.json — done (run segment_sentences.py next)")
+    sys.exit(0)
+
 # assign each whisper segment the speaker with max time overlap
 raw = json.loads((work / "segments_raw.json").read_text())
 
