@@ -39,9 +39,16 @@ def write_transcript(segments, text_key: str, path: Path) -> bool:
 
 
 def export_work(work: Path) -> None:
-    """Export transcripts for every language whose segment file exists."""
-    out = work / "transcripts"
-    print(f"== {work.name}")
+    """Export transcripts for every language whose segment file exists.
+
+    Each run writes into transcripts/<timestamp>/ so earlier exports are
+    never overwritten and runs can be compared.
+    """
+    from datetime import datetime
+
+    stamp = datetime.now().strftime("%m%d-%H%M%S")
+    out = work / "transcripts" / stamp
+    print(f"== {work.name} → transcripts/{stamp}/")
 
     for src, text_key, txt_name, json_name in [
         ("segments.json", "text", "transcript_en.txt", "segments_en.json"),
@@ -51,7 +58,7 @@ def export_work(work: Path) -> None:
         if not src_path.exists():
             print(f"  {src} missing — skipped ({txt_name})")
             continue
-        out.mkdir(exist_ok=True)
+        out.mkdir(parents=True, exist_ok=True)
         segments = json.loads(src_path.read_text())["segments"]
         if write_transcript(segments, text_key, out / txt_name):
             shutil.copyfile(src_path, out / json_name)
