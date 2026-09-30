@@ -2,6 +2,10 @@
 """Synthesize Russian segments with the F5-TTS Russian finetune
 (Misha24-10/F5-TTS_RUSSIAN, v2 checkpoint) — voice cloning per speaker.
 
+Model: Misha24-10/F5-TTS_RUSSIAN "F5TTS_v1_Base_v2" checkpoint (CC-BY-NC)
+on the F5TTS_v1_Base architecture, vocab from F5TTS_v1_Base; vocoder
+charactr/vocos-mel-24khz (auto-downloaded). This is the PRODUCTION TTS.
+
 Usage: venv-f5/bin/python scripts/synthesize_f5.py work/<id> [--min-secs A] [--limit-secs B]
 Reads segments_ru.json + refs/, applies RUAccent stress marks, writes
 tts_f5/seg_XXXX.wav. Resumable.

@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """Speaker diarization + speaker-aware segment merging.
 
+Model: pyannote/speaker-diarization-3.1 (gated on HF; under pyannote 4.x
+it also pulls pyannote/segmentation-3.0 and parts of
+pyannote/speaker-diarization-community-1 — accept conditions on all three).
+
 Usage: venv/bin/python scripts/diarize.py work/<id> [max_speakers]
 Runs pyannote/speaker-diarization-3.1 on audio.wav, tags each whisper
 segment with the speaker who overlaps it most, then merges adjacent

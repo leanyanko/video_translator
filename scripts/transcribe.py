@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 """Transcribe work/<id>/audio.wav with mlx-whisper (segment timestamps).
 
+Model: mlx-community/whisper-large-v3-turbo (Whisper, MLX build for
+Apple Silicon; auto-downloaded from HF on first run).
+
 Usage: venv/bin/python scripts/transcribe.py work/<id>
 Writes segments_raw.json (unmerged; speaker assignment and merging
 happen in diarize.py).

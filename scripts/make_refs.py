@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 """Extract a voice-clone reference clip for EVERY speaker.
 
+Model: none (ffmpeg slicing over segments.json timings).
+
 Usage: venv/bin/python scripts/make_refs.py work/<id>
 For each speaker, picks their longest run of consecutive segments with
 tight gaps (continuous, uninterrupted speech) and extracts

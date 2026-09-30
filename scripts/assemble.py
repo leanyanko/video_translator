@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 """Lay the synthesized Russian segments onto the video's timeline and mux.
 
+Model: none (ffprobe/ffmpeg + pydub audio arithmetic).
+
 Usage: venv/bin/python scripts/assemble.py work/<id>
 Each clip is placed at its segment's start time. If a clip is longer than
 the slot before the next segment, it is sped up with ffmpeg atempo

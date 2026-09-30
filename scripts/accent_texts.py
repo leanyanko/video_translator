@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """Pre-compute RUAccent stress marks for all translated segments.
 
+Model: RUAccent (Den4ikAI), omograph model "turbo" + dictionary;
+auto-downloaded on first run. Known bug: ONNX input mismatch fails on
+~9% of segments — those fall back to unstressed text.
+
 Usage: venv-f5/bin/python scripts/accent_texts.py work/<id>
 Writes accents.json ({segment id: stressed text}). Run BEFORE
 synthesize_f5.py — RUAccent and F5 must not share a process.

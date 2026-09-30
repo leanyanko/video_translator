@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 """Download a YouTube video and extract its audio track.
 
+Model: none (yt-dlp + ffmpeg only).
+
 Usage: venv/bin/python scripts/download.py <youtube-url>
 Creates work/<video-id>/{video.mp4, audio.wav}
 """

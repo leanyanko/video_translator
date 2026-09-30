@@ -2,6 +2,10 @@
 """Synthesize Russian audio for every segment via the local Fish Speech
 API server, using each segment's own speaker reference (multi-voice).
 
+Model: whatever the Fish Speech server was started with — in this repo
+fishaudio/openaudio-s1-mini (gated, CC-BY-NC-SA). LEGACY: kept for
+reference; production synthesis is synthesize_f5.py.
+
 Usage: venv/bin/python scripts/synthesize.py work/<id> [--limit-secs N]
 Reads segments_ru.json ("text_ru" + "speaker" per segment) and refs/.
 Segments are processed grouped by speaker so the server's reference

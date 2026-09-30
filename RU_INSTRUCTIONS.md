@@ -34,7 +34,7 @@ conda create -y -n openvoice python=3.10
 /opt/miniconda3/envs/openvoice/bin/pip install --no-deps git+https://github.com/myshell-ai/OpenVoice.git
 ```
 
-Известные грабли:
+Известные особенности окружения:
 - `torchaudio` новых версий не дружит с ffmpeg 8 из brew — скрипты уже
   обходят это через `soundfile`, ничего делать не надо.
 - RUAccent и F5 нельзя загружать в один процесс (зависает) — поэтому
@@ -85,12 +85,28 @@ Whisper (mlx-community/whisper-large-v3-turbo) скачается сам при 
   НЕ нужны: качество s1-mini забраковано, s2-pro на Mac непрактичен
   (~48 мин на сегмент).
 
+### 2.4 Какая модель используется в каком скрипте
+
+| Скрипт | Модель | Примечание |
+|---|---|---|
+| `download.py` | — | только yt-dlp + ffmpeg |
+| `transcribe.py` | `mlx-community/whisper-large-v3-turbo` | скачается сама при первом запуске |
+| `diarize.py` | `pyannote/speaker-diarization-3.1` | **гейтед** — принять условия на всех трёх страницах из п. 2.1; скачается сама |
+| `apply_translation.py` | — | перевод делает LLM или человек по правилам раздела 4 |
+| `accent_texts.py` | RUAccent (omograph «turbo» + словарь) | скачается сама; на ~9% сегментов падает (баг ONNX) — они идут без ударений |
+| `make_refs.py` | — | нарезка ffmpeg по таймингам |
+| `synthesize_f5.py` | `Misha24-10/F5-TTS_RUSSIAN` (чекпоинт v2) + вокодер `charactr/vocos-mel-24khz` | **основная TTS**; чекпоинт скачать заранее (п. 2.2), CC-BY-NC; вокодер скачается сам |
+| `synthesize.py` | Fish Speech `fishaudio/openaudio-s1-mini` | **устаревший** — качество забраковано, оставлен для справки |
+| `openvoice_convert.py` | `myshell-ai/OpenVoiceV2` (конвертер) | опциональный тембровый проход, CPU; скачать заранее (п. 2.2) |
+| `assemble.py` | — | ffmpeg/ffprobe + pydub |
+| `export_transcripts.py` | — | только перекладка JSON/текста |
+
 ---
 
 ## 3. Запуск пайплайна по шагам
 
 ```bash
-# 1. скачать видео + вытащить аудио → печатает WORKDIR=work/<id>
+# 1. скачать видео + вытащить аудио → coхраняет WORKDIR=work/<id>
 venv/bin/python scripts/download.py "<youtube-url>"
 
 # 2. транскрипция (Whisper, ~5 мин на 2-часовой эпизод)
@@ -103,7 +119,8 @@ venv/bin/python scripts/diarize.py work/<id>
 # 4. ПЕРЕВОД — см. раздел 4 ниже. Каждый чанк применяется так:
 venv/bin/python scripts/apply_translation.py work/<id> <chunk.json>
 
-# 5. ударения (отдельным процессом! см. грабли выше)
+# 5. ударения (обязательно отдельным процессом — RUAccent и F5 в одном
+#    процессе зависают, см. «Известные особенности окружения» в разделе 1)
 venv-f5/bin/python scripts/accent_texts.py work/<id>
 
 # 6. референсы голосов: ≤11.5 сек на спикера, текст точно совпадает с аудио

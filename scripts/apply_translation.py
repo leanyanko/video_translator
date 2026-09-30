@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """Apply a translation map to a video's segments and save transcripts.
 
+Model: none locally — the translations themselves are produced by an LLM
+(or a human) following the timing-budget and stress-mark rules in
+RU_INSTRUCTIONS.md, and passed in as a JSON chunk.
+
 Usage: venv/bin/python scripts/apply_translation.py work/<id> <translations.json>
 
 <translations.json> maps segment id → Russian text, e.g.

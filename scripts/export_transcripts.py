@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 """Export human-readable transcripts + segment data in both languages.
 
+Model: none (pure JSON/text reshaping of existing segment files).
+
 Usage: venv/bin/python scripts/export_transcripts.py work/<id> [work/<id2> ...]
 Writes into work/<id>/transcripts/:
   transcript_en.txt  - full English transcript, speaker-labelled turns

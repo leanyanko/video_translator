@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 """Re-color F5 output with OpenVoice v2's tone-color converter.
 
+Model: myshell-ai/OpenVoiceV2 "converter" checkpoint (tone-color
+conversion only — its base TTS is not used; runs on CPU).
+
 Usage: /opt/miniconda3/envs/openvoice/bin/python scripts/openvoice_convert.py work/<id> [--min-secs A] [--limit-secs B]
 Source: tts_f5/seg_*.wav (already voice-cloned Russian).
 Target timbre: refs/<SPEAKER>.wav (original speakers).
