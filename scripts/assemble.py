@@ -39,12 +39,42 @@ def probe_duration(path: Path) -> float:
 video_dur = probe_duration(work / "video.mp4")
 canvas = AudioSegment.silent(duration=int(video_dur * 1000), frame_rate=SR)
 
+import numpy as np
+import soundfile as sf_
+
+TRIM_THRESHOLD = 0.01  # amplitude fraction (~-40 dBFS): below = silence
+TRIM_MARGIN = 0.05  # keep 50 ms of natural air around the speech
+
+
+def trim_silence(path: Path, out_path: Path) -> Path | None:
+    """Cut leading/trailing silence so speech starts at sample ~0.
+
+    The TTS model paints silence around the speech (imitating the
+    reference's pauses); alignment must use where speech actually starts.
+    Returns None for an all-silent clip.
+    """
+    data, sr = sf_.read(path, dtype="float32")
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    voiced = np.where(np.abs(data) > TRIM_THRESHOLD)[0]
+    if len(voiced) == 0:
+        return None
+    lo = max(0, voiced[0] - int(TRIM_MARGIN * sr))
+    hi = min(len(data), voiced[-1] + int(TRIM_MARGIN * sr))
+    sf_.write(out_path, data[lo:hi], sr)
+    return out_path
+
+
 placed = []  # (start_sec, end_sec) of every dubbed clip, for gap-filling
 cursor = 0.0  # end time of the previously placed clip
 for i, seg in enumerate(segments):
-    clip_path = tts_dir / f"seg_{seg['id']:04d}.wav"
-    if not clip_path.exists():
-        print(f"WARNING: missing {clip_path.name}, skipping")
+    raw_path = tts_dir / f"seg_{seg['id']:04d}.wav"
+    if not raw_path.exists():
+        print(f"WARNING: missing {raw_path.name}, skipping")
+        continue
+    clip_path = trim_silence(raw_path, tmp / f"trim_{raw_path.name}")
+    if clip_path is None:
+        print(f"WARNING: {raw_path.name} is silent, skipping")
         continue
 
     # lip sync beats gapless audio: every line starts at its speaker's
@@ -57,7 +87,9 @@ for i, seg in enumerate(segments):
     dur = probe_duration(clip_path)
     tempo = min(max(dur / slot, 1.0), MAX_TEMPO)
     if tempo > 1.02:
-        fitted = tmp / clip_path.name
+        # distinct name: clip_path may itself live in tmp/ (trimmed),
+        # and ffmpeg must never write the file it is reading
+        fitted = tmp / f"fit_{raw_path.name}"
         subprocess.check_call([
             "ffmpeg", "-y", "-v", "quiet", "-i", str(clip_path),
             "-filter:a", f"atempo={tempo:.4f}", "-ar", str(SR), str(fitted),

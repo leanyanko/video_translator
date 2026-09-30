@@ -21,12 +21,32 @@ segments = json.loads((work / "segments_ru.json").read_text())["segments"]
 accent = RUAccent()
 accent.load(omograph_model_size="turbo", use_dictionary=True)
 
+def reapply_translator_marks(marked_src: str, accented: str) -> str:
+    """Translator-placed stress marks are law: any word carrying '+' in
+    text_ru overrides whatever RUAccent chose for that word."""
+    import re
+
+    overrides = {}
+    for token in marked_src.split():
+        core = token.strip(".,!?…;:—()«»\"'")
+        if "+" in core:
+            overrides[core.replace("+", "").lower()] = core
+    if not overrides:
+        return accented
+    def sub(m):
+        return overrides.get(m.group(0).replace("+", "").lower(), m.group(0))
+    return re.sub(r"[\w+ёЁ-]+", sub, accented)
+
+
 out, failed = {}, []
 for s in segments:
+    plain = s["text_ru"].replace("+", "")  # RUAccent gets unmarked input
     try:
-        out[str(s["id"])] = accent.process_all(s["text_ru"])
+        accented = accent.process_all(plain)
     except Exception as e:
         failed.append((s["id"], str(e)[:80]))
+        accented = plain  # translator marks still applied below
+    out[str(s["id"])] = reapply_translator_marks(s["text_ru"], accented)
 (work / "accents.json").write_text(json.dumps(out, ensure_ascii=False, indent=1))
 print(f"{len(out)} segments stress-marked, {len(failed)} failed")
 for sid, err in failed:
