@@ -21,6 +21,14 @@ how to continue):
 venv/bin/python scripts/run_pipeline.py "<youtube-url>"
 ```
 
+Re-voicing after edits to segments_ru.json (only changed segments are
+re-synthesized; voices reused from the run's refs_f5/):
+
+```bash
+venv/bin/python scripts/redub.py work/<id>
+# or standalone: scripts/redub.py <video.mp4> <segments_ru.json> --refs work/<prev>/refs_f5
+```
+
 Or step by step:
 
 ```bash

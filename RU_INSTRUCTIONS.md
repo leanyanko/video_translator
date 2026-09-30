@@ -115,6 +115,14 @@ venv/bin/python scripts/run_pipeline.py "<youtube-url>"
 # на существующей папке без скачивания: --work work/<id>
 ```
 
+Переозвучка после правок segments_ru.json (пересинтезируются только
+изменённые сегменты; голоса берутся из refs_f5/ прошлого прогона):
+
+```bash
+venv/bin/python scripts/redub.py work/<id>
+# либо отдельно: scripts/redub.py <video.mp4> <segments_ru.json> --refs work/<пред>/refs_f5
+```
+
 Те же шаги по отдельности:
 
 ```bash
