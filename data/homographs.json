@@ -1,0 +1,409 @@
+{
+  "_comment": "Russian homographs: identical spelling, different stress AND meaning. Key = exact unmarked lowercase wordform. 'variants' are tried in order: if any English cue word appears in the segment's ORIGINAL text, that stressed form wins. No cue found => the word is left for RUAccent to decide. Extend freely.",
+  "душе": [
+    {
+      "marked": "д+уше",
+      "en": [
+        "shower"
+      ]
+    },
+    {
+      "marked": "душ+е",
+      "en": [
+        "soul",
+        "heart",
+        "deep down",
+        "at heart"
+      ]
+    }
+  ],
+  "душ": [
+    {
+      "marked": "д+уш",
+      "en": [
+        "shower"
+      ]
+    },
+    {
+      "marked": "д+уш",
+      "en": []
+    }
+  ],
+  "стоит": [
+    {
+      "marked": "ст+оит",
+      "en": [
+        "worth",
+        "should",
+        "costs",
+        "cost"
+      ]
+    },
+    {
+      "marked": "сто+ит",
+      "en": [
+        "stands",
+        "standing",
+        "is located",
+        "sits"
+      ]
+    }
+  ],
+  "замок": [
+    {
+      "marked": "з+амок",
+      "en": [
+        "castle"
+      ]
+    },
+    {
+      "marked": "зам+ок",
+      "en": [
+        "lock",
+        "padlock",
+        "latch"
+      ]
+    }
+  ],
+  "замка": [
+    {
+      "marked": "з+амка",
+      "en": [
+        "castle"
+      ]
+    },
+    {
+      "marked": "замк+а",
+      "en": [
+        "lock",
+        "padlock",
+        "latch"
+      ]
+    }
+  ],
+  "мука": [
+    {
+      "marked": "мук+а",
+      "en": [
+        "flour"
+      ]
+    },
+    {
+      "marked": "м+ука",
+      "en": [
+        "torment",
+        "agony",
+        "torture"
+      ]
+    }
+  ],
+  "белки": [
+    {
+      "marked": "белк+и",
+      "en": [
+        "protein",
+        "proteins"
+      ]
+    },
+    {
+      "marked": "б+елки",
+      "en": [
+        "squirrel",
+        "squirrels"
+      ]
+    }
+  ],
+  "орган": [
+    {
+      "marked": "+орган",
+      "en": [
+        "organ ",
+        "body",
+        "agency"
+      ]
+    },
+    {
+      "marked": "орг+ан",
+      "en": [
+        "pipe organ",
+        "organ music"
+      ]
+    }
+  ],
+  "атлас": [
+    {
+      "marked": "+атлас",
+      "en": [
+        "atlas",
+        "map"
+      ]
+    },
+    {
+      "marked": "атл+ас",
+      "en": [
+        "satin"
+      ]
+    }
+  ],
+  "хлопок": [
+    {
+      "marked": "хл+опок",
+      "en": [
+        "cotton"
+      ]
+    },
+    {
+      "marked": "хлоп+ок",
+      "en": [
+        "clap",
+        "pop",
+        "bang"
+      ]
+    }
+  ],
+  "парить": [
+    {
+      "marked": "пар+ить",
+      "en": [
+        "float",
+        "hover",
+        "soar",
+        "glide"
+      ]
+    },
+    {
+      "marked": "п+арить",
+      "en": [
+        "steam"
+      ]
+    }
+  ],
+  "парит": [
+    {
+      "marked": "пар+ит",
+      "en": [
+        "float",
+        "hover",
+        "soar",
+        "glide"
+      ]
+    },
+    {
+      "marked": "п+арит",
+      "en": [
+        "steam"
+      ]
+    }
+  ],
+  "дорога": [
+    {
+      "marked": "дор+ога",
+      "en": [
+        "road",
+        "way",
+        "path"
+      ]
+    },
+    {
+      "marked": "дорог+а",
+      "en": [
+        "dear",
+        "precious",
+        "valuable"
+      ]
+    }
+  ],
+  "уже": [
+    {
+      "marked": "уж+е",
+      "en": [
+        "already",
+        "no longer",
+        "by now"
+      ]
+    },
+    {
+      "marked": "+уже",
+      "en": [
+        "narrower"
+      ]
+    }
+  ],
+  "берегу": [
+    {
+      "marked": "берег+у",
+      "en": [
+        "shore",
+        "bank",
+        "coast"
+      ]
+    },
+    {
+      "marked": "берег+у",
+      "en": []
+    }
+  ],
+  "потом": [
+    {
+      "marked": "пот+ом",
+      "en": [
+        "then",
+        "later",
+        "afterwards"
+      ]
+    },
+    {
+      "marked": "п+отом",
+      "en": [
+        "sweat"
+      ]
+    }
+  ],
+  "привод": [
+    {
+      "marked": "пр+ивод",
+      "en": [
+        "drive",
+        "actuator",
+        "motor",
+        "gear",
+        "transmission",
+        "chuck"
+      ]
+    },
+    {
+      "marked": "прив+од",
+      "en": [
+        "police",
+        "summons",
+        "custody"
+      ]
+    }
+  ],
+  "привода": [
+    {
+      "marked": "пр+ивода",
+      "en": [
+        "drive",
+        "actuator",
+        "motor",
+        "gear",
+        "transmission",
+        "chuck"
+      ]
+    },
+    {
+      "marked": "прив+ода",
+      "en": [
+        "police",
+        "summons",
+        "custody"
+      ]
+    }
+  ],
+  "приводу": [
+    {
+      "marked": "пр+иводу",
+      "en": [
+        "drive",
+        "actuator",
+        "motor",
+        "gear",
+        "transmission",
+        "chuck"
+      ]
+    },
+    {
+      "marked": "прив+оду",
+      "en": [
+        "police",
+        "summons",
+        "custody"
+      ]
+    }
+  ],
+  "приводом": [
+    {
+      "marked": "пр+иводом",
+      "en": [
+        "drive",
+        "actuator",
+        "motor",
+        "gear",
+        "transmission",
+        "chuck"
+      ]
+    },
+    {
+      "marked": "прив+одом",
+      "en": [
+        "police",
+        "summons",
+        "custody"
+      ]
+    }
+  ],
+  "приводе": [
+    {
+      "marked": "пр+иводе",
+      "en": [
+        "drive",
+        "actuator",
+        "motor",
+        "gear",
+        "transmission",
+        "chuck"
+      ]
+    },
+    {
+      "marked": "прив+оде",
+      "en": [
+        "police",
+        "summons",
+        "custody"
+      ]
+    }
+  ],
+  "приводы": [
+    {
+      "marked": "пр+иводы",
+      "en": [
+        "drive",
+        "actuator",
+        "motor",
+        "gear",
+        "transmission",
+        "chuck"
+      ]
+    },
+    {
+      "marked": "прив+оды",
+      "en": [
+        "police",
+        "summons",
+        "custody"
+      ]
+    }
+  ],
+  "приводов": [
+    {
+      "marked": "пр+иводов",
+      "en": [
+        "drive",
+        "actuator",
+        "motor",
+        "gear",
+        "transmission",
+        "chuck"
+      ]
+    },
+    {
+      "marked": "прив+одов",
+      "en": [
+        "police",
+        "summons",
+        "custody"
+      ]
+    }
+  ]
+}

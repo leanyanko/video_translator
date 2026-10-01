@@ -38,6 +38,8 @@ def reapply_translator_marks(marked_src: str, accented: str) -> str:
     return re.sub(r"[\w+ёЁ-]+", sub, accented)
 
 
+from stress_rules import resolve as resolve_lists  # noqa: E402
+
 out, failed = {}, []
 for s in segments:
     plain = s["text_ru"].replace("+", "")  # RUAccent gets unmarked input
@@ -45,7 +47,10 @@ for s in segments:
         accented = accent.process_all(plain)
     except Exception as e:
         failed.append((s["id"], str(e)[:80]))
-        accented = plain  # translator marks still applied below
+        accented = plain  # list/translator marks still applied below
+    # priority (low → high): RUAccent < name/homograph lists < translator
+    listed = resolve_lists(plain, s.get("text"))
+    accented = reapply_translator_marks(listed, accented)
     out[str(s["id"])] = reapply_translator_marks(s["text_ru"], accented)
 (work / "accents.json").write_text(json.dumps(out, ensure_ascii=False, indent=1))
 print(f"{len(out)} segments stress-marked, {len(failed)} failed")
