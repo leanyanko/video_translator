@@ -17,6 +17,7 @@ from ruaccent import RUAccent
 
 work = Path(sys.argv[1])
 segments = json.loads((work / "segments_ru.json").read_text())["segments"]
+segments = [s for s in segments if s.get("type") != "orig"]  # orig = no text to mark
 
 accent = RUAccent()
 accent.load(omograph_model_size="turbo", use_dictionary=True)

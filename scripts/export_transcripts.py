@@ -62,6 +62,7 @@ def export_work(work: Path) -> None:
             continue
         out.mkdir(parents=True, exist_ok=True)
         segments = json.loads(src_path.read_text())["segments"]
+        segments = [x for x in segments if x.get("type") != "orig"]
         if write_transcript(segments, text_key, out / txt_name):
             shutil.copyfile(src_path, out / json_name)
             print(f"  {txt_name} + {json_name} ({len(segments)} segments)")

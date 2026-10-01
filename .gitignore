@@ -42,3 +42,18 @@ __pycache__/
 .idea/
 .vscode/
 *.swp
+
+# ── Defensive additions ─────────────────────────────────────────────
+# speechbrain creates a literal "None/" symlink dir when savedir is null
+None/
+# model weights must never land in git, wherever they stray
+*.pth
+*.pt
+*.safetensors
+*.onnx
+# audio lab exhibits outside work/
+*.m4a
+*.flac
+# tool caches if ever created in-repo
+.ruaccent/
+.cache/

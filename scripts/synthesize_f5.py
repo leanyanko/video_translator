@@ -53,6 +53,7 @@ SEED = int(sys.argv[sys.argv.index("--seed") + 1]) if "--seed" in sys.argv else 
 REFS = work / ("refs_f5" if (work / "refs_f5").exists() else "refs")
 
 segments = json.loads((work / "segments_ru.json").read_text())["segments"]
+segments = [s for s in segments if s.get("type") != "orig"]  # orig = pasted, not voiced
 # slot = time until the next segment starts; used to pace generation
 slots = {}
 for i, s in enumerate(segments):

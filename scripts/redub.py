@@ -72,6 +72,7 @@ def main() -> None:
                               work / "audio.wav"])
 
     segments = json.loads((work / "segments_ru.json").read_text())["segments"]
+    segments = [s for s in segments if s.get("type") != "orig"]
     missing_refs = {
         s["speaker"] for s in segments
         if not (work / "refs_f5" / f"{s['speaker']}.wav").exists()

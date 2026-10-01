@@ -65,9 +65,32 @@ def trim_silence(path: Path, out_path: Path) -> Path | None:
     return out_path
 
 
+original_audio = None  # loaded lazily for type:"orig" segments
+
 placed = []  # (start_sec, end_sec) of every dubbed clip, for gap-filling
 cursor = 0.0  # end time of the previously placed clip
 for i, seg in enumerate(segments):
+    if seg.get("type") == "orig":
+        # restore the ORIGINAL audio span (laughter, applause, jingle);
+        # never synthesized, never time-fitted, never moves the cursor
+        if "file" in seg:
+            # external source (e.g. a separated laugh stem); the whole
+            # file is placed at seg["start"]
+            piece = (AudioSegment.from_wav(work / seg["file"])
+                     .set_frame_rate(SR).set_channels(1))
+        else:
+            if original_audio is None:
+                original_audio = (AudioSegment.from_wav(work / "audio.wav")
+                                  .set_frame_rate(SR).set_channels(1))
+            piece = original_audio[int(seg["start"] * 1000): int(seg["end"] * 1000)]
+        if "gain_db" in seg:
+            piece = piece + seg["gain_db"]
+        if seg.get("label") == "laugh-micro":
+            piece = piece + 6  # dB; breaths are quiet, the dub would mask them
+        fade = min(80, len(piece) // 2)
+        canvas = canvas.overlay(piece.fade_in(fade).fade_out(fade),
+                                position=int(seg["start"] * 1000))
+        continue
     raw_path = tts_dir / f"seg_{seg['id']:04d}.wav"
     if not raw_path.exists():
         print(f"WARNING: missing {raw_path.name}, skipping")
