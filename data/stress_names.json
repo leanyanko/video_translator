@@ -1,8 +1,8 @@
 {
-  "_comment": "Foreign names / rare words with known stress. Key = unmarked lowercase STEM (matches any inflected form: Ванкувере, Ванкувером...), value = stem with '+' before the stressed vowel. Extend freely.",
+  "_comment": "Foreign names / rare words with known stress. Key = unmarked lowercase STEM (matches any inflected form: Ванкувере, Ванкувером...), value = stem with '+' before the stressed vowel. Extend freely. The marked value MAY be a phonetic respelling for synthesis only (e.g. гельбарт → Г+ельберт, picked by ear); transcripts are built from text_ru and keep real spelling.",
   "ванкувер": "Ванк+увер",
   "мейман": "М+ейман",
-  "гельбарт": "Г+ельбарт",
+  "гельбарт": "Г+ельберт",
   "эрншоу": "+Эрншоу",
   "цейс": "Ц+ейс",
   "фарнсуорт": "Ф+арнсуорт",
