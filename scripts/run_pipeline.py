@@ -65,11 +65,12 @@ def main() -> None:
         work = Path(out.strip().splitlines()[-1].split("WORKDIR=", 1)[1])
     print(f"work dir: {work}")
 
-    if not (work / "words.json").exists():
-        run("2/9 transcribe (word timestamps)",
-            [PY, SCRIPTS / "transcribe.py", work] + limit)
     if not (work / "diarization.json").exists():
-        run("3/9 diarize", [PY, SCRIPTS / "diarize.py", work])
+        run("2/9 diarize", [PY, SCRIPTS / "diarize.py", work])
+    if not (work / "words.json").exists():
+        # after diarize: chunked transcription snaps cuts to speech pauses
+        run("3/9 transcribe (word timestamps, chunked)",
+            [PY, SCRIPTS / "transcribe.py", work] + limit)
     if not (work / "segments.json").exists():
         run("4/9 segment into sentences",
             [PY, SCRIPTS / "segment_sentences.py", work] + limit)

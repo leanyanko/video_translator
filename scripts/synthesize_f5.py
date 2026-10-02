@@ -54,11 +54,17 @@ REFS = work / ("refs_f5" if (work / "refs_f5").exists() else "refs")
 
 segments = json.loads((work / "segments_ru.json").read_text())["segments"]
 segments = [s for s in segments if s.get("type") != "orig"]  # orig = pasted, not voiced
-# slot = time until the next segment starts; used to pace generation
+# slot = time until the next segment starts; used to pace generation.
+# Overlap segments live outside the sequential timeline: they get their
+# own span as slot and must not shrink their neighbours' slots.
+timeline = [s for s in segments if not s.get("overlap")]
 slots = {}
-for i, s in enumerate(segments):
-    nxt = segments[i + 1]["start"] if i + 1 < len(segments) else s["end"] + 2.0
+for i, s in enumerate(timeline):
+    nxt = timeline[i + 1]["start"] if i + 1 < len(timeline) else s["end"] + 2.0
     slots[s["id"]] = max(nxt - s["start"], 1.0)
+for s in segments:
+    if s.get("overlap"):
+        slots[s["id"]] = max(s["end"] - s["start"], 1.0)
 segments = [s for s in segments if s["start"] >= min_secs]
 if limit_secs is not None:
     segments = [s for s in segments if s["start"] < limit_secs]
@@ -100,7 +106,14 @@ for n, seg in enumerate(todo, 1):
     # pace so estimated duration (~12.5 plain chars/sec) fits the slot
     plain_chars = len(seg["text_ru"])
     est_dur = plain_chars / 12.5
-    speed = min(max(est_dur / (slots[seg["id"]] * 0.95), 1.0), 1.3)
+    if seg.get("fill_span"):
+        # an overlapped (interrupted) line must occupy its FULL real
+        # span so the interrupter audibly talks over it — slow down if
+        # the translation is shorter than the original speech
+        span = max(seg["end"] - seg["start"], 1.0)
+        speed = min(max(est_dur / span, 0.8), 1.3)
+    else:
+        speed = min(max(est_dur / (slots[seg["id"]] * 0.95), 1.0), 1.3)
     waves = []
     sr_out = 24000
     for piece in split_single_batch(text):

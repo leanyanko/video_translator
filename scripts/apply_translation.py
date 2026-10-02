@@ -26,6 +26,17 @@ translations = {
     str(k): v for k, v in json.loads(Path(sys.argv[2]).read_text()).items()
 }
 
+# words the TTS provably mispronounces regardless of stress marks —
+# the translation must rephrase around them (data/forbidden_words.json)
+forbidden_path = Path(__file__).resolve().parent.parent / "data" / "forbidden_words.json"
+if forbidden_path.exists():
+    forbidden = json.loads(forbidden_path.read_text())
+    forbidden.pop("_comment", None)
+    for sid, text in translations.items():
+        for stem, advice in forbidden.items():
+            if stem in text.lower():
+                print(f"WARNING seg {sid}: '{stem}' — {advice}")
+
 base = json.loads((work / "segments.json").read_text())
 base_ids = {str(s["id"]) for s in base["segments"]}
 

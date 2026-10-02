@@ -46,6 +46,9 @@ __pycache__/
 # ── Defensive additions ─────────────────────────────────────────────
 # speechbrain creates a literal "None/" symlink dir when savedir is null
 None/
+# speechbrain's in-repo cache of the ECAPA speaker classifier (symlinks
+# into the HF cache; dropped here by overlap_speech.py runs)
+pretrained_models/
 # model weights must never land in git, wherever they stray
 *.pth
 *.pt

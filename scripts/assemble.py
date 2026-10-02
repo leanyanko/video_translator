@@ -23,6 +23,11 @@ work = Path(sys.argv[1])
 tts_name = sys.argv[sys.argv.index("--tts-dir") + 1] if "--tts-dir" in sys.argv else "tts"
 out_name = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else "video_ru.mp4"
 segments = json.loads((work / "segments_ru.json").read_text())["segments"]
+# "overlap": true segments are deliberately CONCURRENT speech (speaker B
+# talking over speaker A): they are excluded from the sequential timeline
+# (no slot math, no cursor) and overlaid afterwards at their own start
+overlap_segments = [s for s in segments if s.get("overlap")]
+segments = [s for s in segments if not s.get("overlap")]
 tts_dir = work / tts_name
 tmp = work / "tmp"
 tmp.mkdir(exist_ok=True)
@@ -37,7 +42,7 @@ def probe_duration(path: Path) -> float:
 
 
 video_dur = probe_duration(work / "video.mp4")
-canvas = AudioSegment.silent(duration=int(video_dur * 1000), frame_rate=SR)
+canvas = AudioSegment.silent(duration=int(video_dur * 1000), frame_rate=SR).set_channels(2)
 
 import numpy as np
 import soundfile as sf_
@@ -120,6 +125,8 @@ for i, seg in enumerate(segments):
         clip_path, dur = fitted, dur / tempo
 
     clip = AudioSegment.from_wav(clip_path).set_frame_rate(SR).set_channels(1)
+    if "pan" in seg:
+        clip = clip.set_channels(2).pan(seg["pan"])
     canvas = canvas.overlay(clip, position=int(place_at * 1000))
     placed.append((place_at, place_at + dur))
     cursor = place_at + dur
@@ -146,6 +153,46 @@ if "--fill-gaps" in sys.argv:
         canvas = canvas.overlay(piece.fade_in(fade).fade_out(fade), position=int(gs * 1000))
     print(f"gap-filled {len(gaps)} regions with original audio "
           f"({sum(ge-gs for gs, ge in gaps):.0f}s total)")
+
+# overlay the concurrent-speech segments (speaker-over-speaker)
+for seg in overlap_segments:
+    raw_path = tts_dir / f"seg_{seg['id']:04d}.wav"
+    if not raw_path.exists():
+        print(f"WARNING: overlap seg {seg['id']} missing, skipping")
+        continue
+    clip_path = trim_silence(raw_path, tmp / f"trim_{raw_path.name}")
+    if clip_path is None:
+        continue
+    span = max(seg["end"] - seg["start"], 0.5)
+    dur = probe_duration(clip_path)
+    tempo = min(max(dur / span, 1.0), MAX_TEMPO)
+    if tempo > 1.02:
+        fitted = tmp / f"fit_{raw_path.name}"
+        subprocess.check_call([
+            "ffmpeg", "-y", "-v", "quiet", "-i", str(clip_path),
+            "-filter:a", f"atempo={tempo:.4f}", "-ar", str(SR), str(fitted)])
+        clip_path = fitted
+    clip = AudioSegment.from_wav(clip_path).set_frame_rate(SR).set_channels(1)
+    if "gain_db" in seg:
+        clip = clip + seg["gain_db"]
+    if "pan" in seg:
+        clip = clip.set_channels(2).pan(seg["pan"])
+    canvas = canvas.overlay(clip, position=int(seg["start"] * 1000))
+if overlap_segments:
+    print(f"overlaid {len(overlap_segments)} concurrent-speech segments")
+
+# optional full-length music/SFX bed (multitrack mode): the editor's
+# "Music and SFX" stem is timeline-aligned and already mixed at
+# speech-relative levels, so it is overlaid as-is; --music-gain adjusts by ear
+if "--music" in sys.argv:
+    music_path = Path(sys.argv[sys.argv.index("--music") + 1])
+    music_gain = (float(sys.argv[sys.argv.index("--music-gain") + 1])
+                  if "--music-gain" in sys.argv else 0.0)
+    bed = AudioSegment.from_file(music_path).set_frame_rate(SR).set_channels(2)
+    if music_gain:
+        bed = bed + music_gain
+    canvas = canvas.overlay(bed, position=0)
+    print(f"mixed music bed {music_path.name} ({music_gain:+.1f} dB)")
 
 dubbed = work / "dubbed.wav"
 canvas.export(dubbed, format="wav")

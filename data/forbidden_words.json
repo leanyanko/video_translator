@@ -1,0 +1,4 @@
+{
+  "_comment": "Words F5 mispronounces no matter what stress marks say (verified by ear-lab). The translation must REPHRASE around them; apply_translation.py warns when they appear.",
+  "нобелевск": "F5 всегда говорит «нобеле́вский» — писать через фамилию: «комитет Нобеля», «премия Нобеля», «лауреат Нобеля»"
+}
