@@ -2,8 +2,13 @@
 """Pre-compute RUAccent stress marks for all translated segments.
 
 Model: RUAccent (Den4ikAI), omograph model "turbo" + dictionary;
-auto-downloaded on first run. Known bug: ONNX input mismatch fails on
-~9% of segments — those fall back to unstressed text.
+auto-downloaded on first run. The library's turbo omograph model used
+to fail on ~9% of segments ("Required inputs (['token_type_ids']) are
+missing"): its ONNX graph requires token_type_ids but the wrapper's
+odd-hypotheses code path doesn't pass it. Patched below by feeding
+zeros for any declared-but-missing token_type_ids (correct for a
+single-segment BERT pair encode); those sentences now get full marks
+instead of falling back to unstressed text.
 
 Usage: venv-f5/bin/python scripts/accent_texts.py work/<id>
 Writes accents.json ({segment id: stressed text}). Run BEFORE
@@ -13,7 +18,25 @@ import json
 import sys
 from pathlib import Path
 
-from ruaccent import RUAccent
+import numpy as np
+from onnxruntime import InferenceSession
+
+_orig_run = InferenceSession.run
+
+def _run_with_token_type_ids(self, output_names, input_feed, *args, **kwargs):
+    try:
+        need = {i.name for i in self.get_inputs()}
+        if ("token_type_ids" in need and "token_type_ids" not in input_feed
+                and "input_ids" in input_feed):
+            input_feed = {**input_feed,
+                          "token_type_ids": np.zeros_like(input_feed["input_ids"])}
+    except Exception:
+        pass
+    return _orig_run(self, output_names, input_feed, *args, **kwargs)
+
+InferenceSession.run = _run_with_token_type_ids
+
+from ruaccent import RUAccent  # noqa: E402
 
 work = Path(sys.argv[1])
 segments = json.loads((work / "segments_ru.json").read_text())["segments"]

@@ -95,12 +95,24 @@ import numpy as np
 import soundfile as sf
 
 ref_text_cache = {}
+piece_cap = {}  # per speaker: our split cap, set BELOW F5's own
+# F5 internally re-chunks gen_text at max_chars = ref_bytes/ref_sec *
+# (22 - ref_sec) * speed and BATCHES the chunks — multi-batch segfaults
+# on MPS. Keep every piece under that limit (speed>=1 only raises it)
+# so each infer call stays a single batch.
 t_start = time.time()
 for n, seg in enumerate(todo, 1):
     spk = seg["speaker"]
     ref_wav = REFS / f"{spk}.wav"
     if spk not in ref_text_cache:
         ref_text_cache[spk] = (REFS / f"{spk}.txt").read_text().strip()
+        info = sf.info(str(ref_wav))
+        ref_sec = info.frames / info.samplerate
+        f5_max = (len(ref_text_cache[spk].encode("utf-8"))
+                  / ref_sec * max(22 - ref_sec, 1.0))
+        piece_cap[spk] = f5_max
+        print(f"{spk}: ref {ref_sec:.1f}s, F5 max_chars {f5_max:.0f} bytes",
+              flush=True)
     text = accents.get(str(seg["id"]), seg["text_ru"])
     t0 = time.time()
     # pace so estimated duration (~12.5 plain chars/sec) fits the slot
@@ -116,7 +128,9 @@ for n, seg in enumerate(todo, 1):
         speed = min(max(est_dur / (slots[seg["id"]] * 0.95), 1.0), 1.3)
     waves = []
     sr_out = 24000
-    for piece in split_single_batch(text):
+    # F5's limit scales with speed; speed<1 (slowed fill_span) shrinks it
+    cap = min(150, int(piece_cap[spk] * min(speed, 1.0) * 0.9))
+    for piece in split_single_batch(text, cap):
         wav, sr_out, _ = tts.infer(
             ref_file=str(ref_wav),
             ref_text=ref_text_cache[spk],

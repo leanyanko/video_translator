@@ -3,10 +3,14 @@
 
 Model: none (ffmpeg slicing over segments.json timings).
 
-Usage: venv/bin/python scripts/make_refs.py work/<id>
+Usage: venv/bin/python scripts/make_refs.py work/<id> [--tracks]
 For each speaker, picks their longest run of consecutive segments with
 tight gaps (continuous, uninterrupted speech) and extracts
 refs/<SPEAKER>.wav + refs/<SPEAKER>.txt.
+
+--tracks (multitrack mode): cut each clip from that speaker's SOLO stem
+(work/<id>/tracks + tracks.json) instead of the mix — the reference is
+then free of music and other voices, which clones noticeably cleaner.
 """
 import json
 import subprocess
@@ -26,6 +30,12 @@ refs_name = (
 data = json.loads((work / "segments.json").read_text())
 refs_dir = work / refs_name
 refs_dir.mkdir(exist_ok=True)
+
+track_of = {}
+if "--tracks" in sys.argv:
+    tracks_meta = json.loads((work / "tracks.json").read_text())
+    track_of = {spk: work / "tracks" / f
+                for spk, f in tracks_meta["speakers"].items()}
 
 for spk in data["speakers"]:
     segs = [s for s in data["segments"] if s["speaker"] == spk]
@@ -50,8 +60,9 @@ for spk in data["speakers"]:
     dur, start, end, texts = best
     if dur < MIN_SECS:
         print(f"WARNING: {spk} best clip is only {dur:.1f}s — cloning may be weak")
+    source = track_of.get(spk, work / "audio.wav")
     subprocess.check_call([
-        "ffmpeg", "-y", "-v", "quiet", "-i", str(work / "audio.wav"),
+        "ffmpeg", "-y", "-v", "quiet", "-i", str(source),
         "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
         "-ac", "1", "-ar", "44100", str(refs_dir / f"{spk}.wav"),
     ])
