@@ -51,7 +51,17 @@ threshold = float(sys.argv[sys.argv.index("--threshold") + 1]) if "--threshold" 
 speech_max = float(sys.argv[sys.argv.index("--speech-max") + 1]) if "--speech-max" in sys.argv else 0.5
 dry_run = "--dry-run" in sys.argv
 
-tracks_meta = json.loads((work / "tracks.json").read_text())
+# laughs are cut from the RAW stems when they exist: clean_stems.py
+# builds each speaker's profile from their SPEECH, so it can mute the
+# owner's own LAUGHTER as "foreign" (seen: a loud laugh at full level
+# on the raw stem, silence on the cleaned one). Bleed is no problem
+# here — PANNs only accepts laugh-scored, speech-poor windows anyway.
+if (work / "tracks_raw.json").exists():
+    tracks_meta = json.loads((work / "tracks_raw.json").read_text())
+    TRACKS_DIR = work / "tracks_raw"
+else:
+    tracks_meta = json.loads((work / "tracks.json").read_text())
+    TRACKS_DIR = work / "tracks"
 ru = json.loads((work / "segments_ru.json").read_text())
 # same-speaker dubbed spans (the collision filter); orig segments excluded
 dub_spans = {}
@@ -139,7 +149,7 @@ only_spk = (set(sys.argv[sys.argv.index("--speakers") + 1].split(","))
 for spk, fname in tracks_meta["speakers"].items():
     if only_spk and spk not in only_spk:
         continue
-    track = work / "tracks" / fname
+    track = TRACKS_DIR / fname
     regions = voiced_regions(track)
     print(f"{spk} ({fname}): {len(regions)} voiced regions, "
           f"{sum(b - a for a, b in regions) / 60:.1f} min", flush=True)

@@ -1,7 +1,8 @@
 # ── Project-specific ────────────────────────────────────────────────
 # Python virtualenv (~7 GB: torch, fish-speech deps) — recreate via README
-venv/
-venv-f5/
+# every virtualenv, present and future (venv, venv-f5, venv-qwen, venv-cbx…)
+venv*/
+*.venv/
 
 # Fish Speech model weights (~3.3 GB, gated on HF; CC-BY-NC-SA license
 # likely forbids redistribution) — download via `hf download`, see README
