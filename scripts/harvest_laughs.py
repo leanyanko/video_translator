@@ -1,196 +1,194 @@
 #!/usr/bin/env python
-"""Harvest CLEAN laughs from the editor's per-speaker stems (multitrack mode).
+"""Restore the speakers' NON-SPEECH sounds (laughs, hums, sighs) from
+the raw stems — by construction, not by detection.
 
-Model: PANNs Cnn14 (AudioSet tagging, CPU; checkpoint in ~/panns_data).
+Model: none for the keep/drop decision; PANNs Cnn14 only LABELS what
+was kept (Laughter/Applause/… for the transcripts), loaded lazily and
+skippable with --no-label.
 
-Usage: venv/bin/python scripts/harvest_laughs.py work/<id> [--threshold 0.12]
-           [--speech-max 0.5] [--dry-run]
+Usage: venv/bin/python scripts/harvest_laughs.py work/<id>
+           [--dry-run] [--debug] [--no-label] [--speakers SPEAKER_03]
+       (legacy --threshold is accepted; it only tunes the LABEL
+        confidence, never whether a sound is kept)
 
-Requires work/<id>/tracks.json:
+The previous version asked a classifier what is a laugh and lost both
+laughs of the traps baseline: breathy laughter scores ~0.05, a chuckle
+sat exactly on the 0.12 threshold, and clean_stems had muted them
+anyway (its voice profile is built from speech). This version uses an
+invariant instead:
 
-    {"speakers": {"SPEAKER_00": "… Dan Audio Only.mp3", ...},
-     "music": "… Music and SFX Audio Only.mp3"}
+    On a speaker's own RAW stem, every voiced island NOT covered by his
+    dubbed speech segments IS his non-speech vocalization. His speech
+    spans are known word-exactly; everything else of his voice belongs
+    in the dub as-is.
 
-with the files in work/<id>/tracks/. Unlike detect_laughs.py (mix mode,
-gaps only), a solo stem holds ONE voice, so a laugh found anywhere on it
-is clean — it may be overlaid even while another speaker's dub is
-talking, like a real listener laughing over speech. Only collisions with
-the SAME speaker's dubbed lines are rejected (his dub would fight his
-own laugh).
-
-Found laughs are cropped to work/<id>/laughs/<speaker>_<start>.wav and
-appended to segments_ru.json as
-
-    {"id": 95xx, "type": "orig", "auto_track": true, "speaker": ...,
-     "file": "laughs/....wav", "start": ..., "end": ..., "label": ..., "score": ...}
-
-assemble.py pastes every type:"orig" segment with file= as-is (stems are
-already at the editor's levels). Re-running replaces previous auto_track
-entries; manual and detect_laughs entries are untouched.
+Keep/drop chain per speaker:
+  1. voiced islands of the RAW stem (shared scan; raw because cleaning
+     mutes exactly these sounds);
+  2. minus his speech spans from segments_ru.json (±MARGIN), minus
+     spans already pasted as orig by other stages (no duplicates);
+  3. anti-bleed: dropped when some OTHER raw stem is ≥ BLEED_RATIO×
+     louder over the span — someone else's voice in his mic. A real
+     laugh OVER someone's speech survives: his mic is close, the ratio
+     stays small. Measured anchors (work/exp_traps_v3): Misha's laugh
+     own 0.054 vs Dan 0.2 → ratio ~4, kept; Dan-bleed on Misha's stem
+     own 0.017 vs Dan 0.3 → ratio ~18, dropped;
+  4. the rest is cut to laughs/<spk>_<t>.wav and appended to
+     segments_ru.json as {"type": "orig", "auto_track": true, id 9500+}
+     — re-runs replace only their own entries, manual ones survive.
 """
 import json
 import subprocess
 import sys
 from pathlib import Path
 
-from cli_args import flag, opt
-
 import numpy as np
 
-TARGET_LABELS = ("Laughter", "Giggle", "Chuckle, chortle", "Snicker",
-                 "Belly laugh")
-from audio_utils import (RMS_SILENCE, SCAN_FRAME as FRAME, decode,  # noqa: E402
+from audio_utils import (SCAN_FRAME, SCAN_SR, decode, frame_rms,
                          merge_regions, scan_voiced_regions)
+from cli_args import flag, opt
 
-SR = 32000          # PANNs native rate
-WIN, HOP = 4.0, 2.0  # classification window / hop, sec
-MIN_REGION = 0.4     # sec; shorter voiced blips aren't classified
-MERGE_GAP = 0.6      # sec; voiced regions closer than this are merged
-EDGE_PAD = 0.12      # sec of air kept around the harvested laugh
-COLLIDE_PAD = 0.15   # sec; min clearance from the same speaker's dub
-
-work = Path(sys.argv[1])
-threshold = opt("--threshold", 0.12, float)
-speech_max = opt("--speech-max", 0.5, float)
-dry_run = flag("--dry-run")
-
-# laughs are cut from the RAW stems when they exist: clean_stems.py
-# builds each speaker's profile from their SPEECH, so it can mute the
-# owner's own LAUGHTER as "foreign" (seen: a loud laugh at full level
-# on the raw stem, silence on the cleaned one). Bleed is no problem
-# here — PANNs only accepts laugh-scored, speech-poor windows anyway.
-if (work / "tracks_raw.json").exists():
-    tracks_meta = json.loads((work / "tracks_raw.json").read_text())
-    TRACKS_DIR = work / "tracks_raw"
-else:
-    tracks_meta = json.loads((work / "tracks.json").read_text())
-    TRACKS_DIR = work / "tracks"
-ru = json.loads((work / "segments_ru.json").read_text())
-# same-speaker dubbed spans (the collision filter); orig segments excluded
-dub_spans = {}
-# same-speaker orig clips already on the timeline (segment_tracks.py
-# nonverbal cuts, manual entries): a laugh found there is a duplicate
-orig_spans = {}
-for s in ru["segments"]:
-    if s.get("auto_track"):
-        continue
-    spans = orig_spans if s.get("type") == "orig" else dub_spans
-    spans.setdefault(s.get("speaker"), []).append((s["start"], s["end"]))
+MARGIN = 0.25        # sec around dubbed speech that still counts as speech
+MIN_SOUND = 0.4      # sec; shorter leftovers are breath clicks
+ISLAND_GAP = 0.4     # sec; bursts this close are one sound
+BLEED_RATIO = 6.0    # another stem this much louder = bleed, not him
+ABS_FLOOR = 0.012    # absolute RMS floor for a keepable sound
+PAD = 0.08           # sec of air kept around the cut
+LABEL_SET = ("Laughter", "Giggle", "Chuckle, chortle", "Snicker",
+             "Belly laugh", "Applause", "Sigh", "Cough")
 
 
-def voiced_regions(path: Path) -> list[tuple[float, float]]:
-    """Streamed RMS scan of the whole stem (solo tracks are mostly
-    silence): merge near regions, drop blips."""
-    merged = merge_regions(scan_voiced_regions(path, FRAME, RMS_SILENCE), MERGE_GAP)
-    return [(a, b) for a, b in merged if b - a >= MIN_REGION]
+def subtract_speech(islands, speech_spans, margin=MARGIN, min_secs=MIN_SOUND):
+    """Parts of voiced islands not covered by (padded) speech spans."""
+    spans = sorted((a - margin, b + margin) for a, b in speech_spans)
+    out = []
+    for a, b in islands:
+        cur = a
+        for sa, sb in spans:
+            if sb <= cur or sa >= b:
+                continue
+            if sa > cur:
+                out.append((cur, min(sa, b)))
+            cur = max(cur, sb)
+            if cur >= b:
+                break
+        if cur < b:
+            out.append((cur, b))
+    return [(a, b) for a, b in out if b - a >= min_secs]
 
 
-def collides(spk: str, a: float, b: float, spans=dub_spans) -> bool:
-    for s, e in spans.get(spk, ()):
-        if a < e + COLLIDE_PAD and b > s - COLLIDE_PAD:
-            return True
-    return False
+def bleed_dropped(own_rms: float, others_max: float,
+                  ratio: float = BLEED_RATIO) -> bool:
+    """Someone else's voice in this mic? (their stem dwarfs this one)"""
+    return others_max >= ratio * max(own_rms, 1e-6)
 
 
-from panns_inference import AudioTagging  # slow import; after arg errors
+def main() -> None:
+    work = Path(sys.argv[1])
+    dry_run = flag("--dry-run")
+    debug = flag("--debug")
+    label_on = not flag("--no-label")
+    label_thr = opt("--threshold", 0.1, float)
+    only_spk = opt("--speakers", None, lambda v: set(v.split(",")))
 
-tagger = AudioTagging(checkpoint_path=None, device="cpu")
-labels = tagger.labels
-laugh_idx = [i for i, l in enumerate(labels) if l in TARGET_LABELS]
-speech_i = labels.index("Speech")
+    # RAW stems when they exist — clean_stems mutes exactly these sounds
+    if (work / "tracks_raw.json").exists():
+        tracks_meta = json.loads((work / "tracks_raw.json").read_text())
+        tracks_dir = work / "tracks_raw"
+    else:
+        tracks_meta = json.loads((work / "tracks.json").read_text())
+        tracks_dir = work / "tracks"
+    speakers = tracks_meta["speakers"]
 
-laughs_dir = work / "laughs"
-laughs_dir.mkdir(exist_ok=True)
-found = []
+    ru = json.loads((work / "segments_ru.json").read_text())
+    speech, origs = {}, {}
+    for s in ru["segments"]:
+        if s.get("auto_track"):
+            continue  # ours from a previous run: replaced wholesale
+        dst = origs if s.get("type") == "orig" else speech
+        dst.setdefault(s.get("speaker"), []).append((s["start"], s["end"]))
 
-debug = flag("--debug")
-only_spk = opt("--speakers", None, lambda v: set(v.split(",")))
+    # all stems are decoded even under --speakers: the anti-bleed check
+    # needs every OTHER stem's loudness
+    audios = {spk: decode(tracks_dir / f, SCAN_SR)
+              for spk, f in speakers.items()}
+    frame_n = int(SCAN_FRAME * SCAN_SR)
+    rms = {spk: frame_rms(a, frame_n) for spk, a in audios.items()}
 
-for spk, fname in tracks_meta["speakers"].items():
-    if only_spk and spk not in only_spk:
-        continue
-    track = TRACKS_DIR / fname
-    regions = voiced_regions(track)
-    print(f"{spk} ({fname}): {len(regions)} voiced regions, "
-          f"{sum(b - a for a, b in regions) / 60:.1f} min", flush=True)
-    # a short voiced region is classified WHOLE (a laugh between lines is
-    # its own energy island on a solo stem — a fixed window grid would
-    # dilute its score with silence/speech); long regions get windows
-    windows = []
-    for a, b in regions:
-        if b - a <= WIN * 1.5:
-            windows.append((a, b))
-        else:
-            t = a
-            while t < b:
-                windows.append((t, min(t + WIN, b)))
-                if t + WIN >= b:
-                    break
-                t += HOP
-    hits = []  # (start, end, label, laugh_score)
-    BATCH = 16
-    for i in range(0, len(windows), BATCH):
-        batch = windows[i: i + BATCH]
-        maxlen = max(int((b - a) * SR) for a, b in batch)
-        clips = np.zeros((len(batch), max(maxlen, SR)), dtype=np.float32)
-        for j, (a, b) in enumerate(batch):
-            c = decode(track, SR, start=a, dur=b - a)
-            clips[j, : len(c)] = c[: clips.shape[1]]
-        scores = tagger.inference(clips)[0]
-        for j, (a, b) in enumerate(batch):
-            best_i = max(laugh_idx, key=lambda k: scores[j][k])
-            ls, ss = float(scores[j][best_i]), float(scores[j][speech_i])
-            if debug and ls >= 0.05:
-                print(f"  dbg {a:8.1f}-{b:8.1f} laugh={ls:.2f} "
-                      f"speech={ss:.2f} {labels[best_i]}", flush=True)
-            if ls >= threshold and ss <= speech_max:
-                hits.append([a, b, labels[best_i], ls])
-    # merge overlapping hit windows, keep the best label/score
-    hits.sort()
-    spans = []
-    for a, b, lab, sc in hits:
-        if spans and a <= spans[-1][1]:
-            spans[-1][1] = max(spans[-1][1], b)
-            if sc > spans[-1][3]:
-                spans[-1][2], spans[-1][3] = lab, sc
-        else:
-            spans.append([a, b, lab, sc])
-    for a, b, lab, sc in spans:
-        # trim the span to actual energy (the window grid is coarse)
-        c = decode(track, 16000, start=a, dur=b - a)
-        voiced = np.where(np.abs(c) > RMS_SILENCE)[0]
-        if len(voiced) == 0:
+    def span_rms(spk, a, b):
+        r = rms[spk][int(a / SCAN_FRAME): max(int(b / SCAN_FRAME),
+                                              int(a / SCAN_FRAME) + 1)]
+        return float(r.mean()) if len(r) else 0.0
+
+    found = []
+    for spk, fname in speakers.items():
+        if only_spk and spk not in only_spk:
             continue
-        lo = max(a, a + voiced[0] / 16000 - EDGE_PAD)
-        hi = min(b, a + voiced[-1] / 16000 + EDGE_PAD)
-        if hi - lo < 0.3:
-            continue
-        if collides(spk, lo, hi):
-            print(f"  {lo:8.1f}-{hi:8.1f}  {lab:16s} {sc:.2f}  SKIP (own dub)")
-            continue
-        if collides(spk, lo, hi, orig_spans):
-            print(f"  {lo:8.1f}-{hi:8.1f}  {lab:16s} {sc:.2f}  SKIP (already orig)")
-            continue
-        wav = laughs_dir / f"{spk}_{int(lo):05d}.wav"
-        if not dry_run:
-            subprocess.check_call([
-                "ffmpeg", "-y", "-v", "error", "-ss", f"{lo:.3f}",
-                "-t", f"{hi - lo:.3f}", "-i", str(track),
-                "-ar", "44100", "-ac", "1", str(wav)])
-        found.append({"speaker": spk, "file": f"laughs/{wav.name}",
-                      "start": round(lo, 3), "end": round(hi, 3),
-                      "label": lab, "score": round(sc, 3)})
-        print(f"  {lo:8.1f}-{hi:8.1f}  {lab:16s} {sc:.2f}  -> {wav.name}")
+        islands = merge_regions(
+            scan_voiced_regions(tracks_dir / fname), ISLAND_GAP)
+        # speech spans AND existing orig pastes both count as covered
+        covered = speech.get(spk, []) + origs.get(spk, [])
+        cands = subtract_speech(islands, covered)
+        print(f"{spk}: {len(islands)} voiced islands -> "
+              f"{len(cands)} non-speech candidates", flush=True)
+        for a, b in cands:
+            own = span_rms(spk, a, b)
+            others = max((span_rms(o, a, b) for o in audios if o != spk),
+                         default=0.0)
+            verdict = None
+            if own < ABS_FLOOR:
+                verdict = "too quiet"
+            elif bleed_dropped(own, others):
+                verdict = f"bleed (others {others:.3f} vs own {own:.3f})"
+            if debug or verdict is None:
+                print(f"  {spk[-2:]} {a:7.1f}-{b:7.1f} own={own:.3f} "
+                      f"others={others:.3f} -> {verdict or 'KEEP'}", flush=True)
+            if verdict:
+                continue
+            found.append({"speaker": spk,
+                          "start": round(max(0.0, a - PAD), 3),
+                          "end": round(b + PAD, 3), "label": "nonspeech"})
 
-if dry_run:
-    print(f"DRY RUN: {len(found)} laughs found, nothing written")
-    sys.exit(0)
+    if label_on and found:
+        from panns_inference import AudioTagging  # lazy: labels only
+        import librosa
+        tagger = AudioTagging(checkpoint_path=None, device="cpu")
+        names = tagger.labels
+        want = [i for i, l in enumerate(names) if l in LABEL_SET]
+        for f in found:
+            seg16 = audios[f["speaker"]][int(f["start"] * SCAN_SR):
+                                         int(f["end"] * SCAN_SR)]
+            clip32 = librosa.resample(np.asarray(seg16, dtype=np.float32),
+                                      orig_sr=SCAN_SR, target_sr=32000)
+            scores = tagger.inference(clip32[None, :])[0][0]
+            best = max(want, key=lambda i: scores[i])
+            if float(scores[best]) >= label_thr:
+                f["label"] = names[best]
+                f["score"] = round(float(scores[best]), 3)
 
-segs = [s for s in ru["segments"] if not s.get("auto_track")]
-next_id = 9500
-for f in sorted(found, key=lambda f: f["start"]):
-    segs.append({"id": next_id, "type": "orig", "auto_track": True, **f})
-    next_id += 1
-ru["segments"] = sorted(segs, key=lambda s: s["start"])
-(work / "segments_ru.json").write_text(json.dumps(ru, ensure_ascii=False, indent=1))
-print(f"{len(found)} track-laugh segments written to segments_ru.json")
+    if dry_run:
+        print(f"DRY RUN: {len(found)} non-speech sounds found, nothing written")
+        return
+
+    laughs_dir = work / "laughs"
+    laughs_dir.mkdir(exist_ok=True)
+    segs = [s for s in ru["segments"] if not s.get("auto_track")]
+    next_id = 9500
+    for f in sorted(found, key=lambda x: x["start"]):
+        wav = laughs_dir / f"{f['speaker']}_{int(f['start'] * 10):06d}.wav"
+        subprocess.check_call([
+            "ffmpeg", "-y", "-v", "error", "-ss", f"{f['start']:.3f}",
+            "-t", f"{f['end'] - f['start']:.3f}",
+            "-i", str(tracks_dir / speakers[f["speaker"]]),
+            "-ar", "44100", "-ac", "1", str(wav)])
+        segs.append({"id": next_id, "type": "orig", "auto_track": True,
+                     "file": f"laughs/{wav.name}", **f})
+        next_id += 1
+    ru["segments"] = sorted(segs, key=lambda s: s["start"])
+    (work / "segments_ru.json").write_text(
+        json.dumps(ru, ensure_ascii=False, indent=1))
+    print(f"{len(found)} non-speech segments written to segments_ru.json")
+
+
+if __name__ == "__main__":
+    main()
