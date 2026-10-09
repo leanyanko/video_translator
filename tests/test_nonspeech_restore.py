@@ -78,10 +78,6 @@ class LaughSignatureTest(unittest.TestCase):
         self.assertFalse(is_laugh(0.5, 1, 0.01))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class BleedCalibrationTest(unittest.TestCase):
     def test_solo_spans_subtract_other_speakers(self):
         from harvest_laughs import solo_spans
@@ -101,7 +97,8 @@ class BleedCalibrationTest(unittest.TestCase):
         from harvest_laughs import bleed_expected, OWN_OVER_BLEED
         coeffs = {("M", "D"): 0.05}
         exp = bleed_expected(coeffs, "M", {"D": 0.3})
-        self.assertLessEqual(0.017, OWN_OVER_BLEED * exp + 0.03)  # ~expected level
+        own = 0.017  # measured pure-bleed level
+        self.assertLessEqual(own, OWN_OVER_BLEED * exp)  # the actual DROP decision
 
     def test_uncalibrated_audible_pair_falls_back(self):
         from harvest_laughs import bleed_expected
@@ -135,3 +132,42 @@ class RawStemSourceTest(unittest.TestCase):
                 {"speakers": {"S": "only.flac"}}))
             spk, d = raw_stem_source(w)
             self.assertEqual(d.name, "tracks")
+
+class LoneSfxGateTest(unittest.TestCase):
+    def setUp(self):
+        import numpy as np
+        self.np = np
+
+    def test_underscore_music_is_not_pumped(self):
+        # continuous bed at -30 dBFS under speech AND through the pause
+        from audio_utils import lone_sfx_gain
+        bed = [0.03] * 40
+        dub = [True] * 10 + [False] * 20 + [True] * 10
+        g = lone_sfx_gain(bed, dub)
+        self.assertTrue((g == 1.0).all(), "quiet music must pass untouched")
+
+    def test_poking_foley_in_pause_is_ducked(self):
+        from audio_utils import lone_sfx_gain
+        bed = [0.004] * 15 + [0.04] * 4 + [0.004] * 21  # burst in silence
+        dub = [True] * 10 + [False] * 20 + [True] * 10
+        g = lone_sfx_gain(bed, dub)
+        self.assertTrue((g[15:19] < 1.0).all(), "foley burst must duck")
+        self.assertTrue((g[:10] == 1.0).all())
+
+    def test_long_transient_is_music_not_foley(self):
+        from audio_utils import lone_sfx_gain
+        bed = [0.004] * 12 + [0.04] * 20 + [0.004] * 8  # 2 s "transient"
+        dub = [True] * 8 + [False] * 26 + [True] * 6
+        g = lone_sfx_gain(bed, dub, max_run=15)
+        self.assertTrue((g == 1.0).all(), ">1.5s of sound is music")
+
+    def test_smooth_gain_ramps_steps(self):
+        from audio_utils import smooth_gain
+        g = smooth_gain([1.0, 0.01, 1.0], frame_len=100, ramp_len=40)
+        self.assertEqual(len(g), 300)
+        mid = g[80:120]
+        self.assertTrue((self.np.diff(mid) <= 1e-6).all())  # monotone down
+        self.assertTrue(0.01 < g[99] < 1.0, "step must be ramped, not hard")
+
+if __name__ == "__main__":
+    unittest.main()

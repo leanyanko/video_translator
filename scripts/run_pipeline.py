@@ -221,14 +221,19 @@ def main() -> None:
         sys.path.insert(0, str(SCRIPTS))
         from cli_args import opt as _opt
         restore = _opt("--restore-sounds", "laughs")
+        import hashlib as _hl
+        _ru = json.loads((work / "segments_ru.json").read_text())["segments"]
+        _spans = sorted((s["speaker"], round(s["start"], 2), round(s["end"], 2))
+                        for s in _ru if s.get("type") != "orig")
+        stamp = f"{restore}:" + _hl.sha1(repr(_spans).encode()).hexdigest()[:12]
         mode_file = work / "laughs" / ".mode"
-        prev_mode = mode_file.read_text().strip() if mode_file.exists() else None
-        if restore != "none" and prev_mode != restore:
+        prev = mode_file.read_text().strip() if mode_file.exists() else None
+        if prev != stamp:  # mode changed OR speech timings edited
             run(f"restore non-speech sounds off the raw stems ({restore})",
                 [PY, SCRIPTS / "harvest_laughs.py", work,
                  "--restore-sounds", restore])
             mode_file.parent.mkdir(exist_ok=True)
-            mode_file.write_text(restore)
+            mode_file.write_text(stamp)
 
     doctor(work, "before assembly")
 

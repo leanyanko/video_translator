@@ -112,7 +112,6 @@ def solo_spans(speech: dict, spk: str, min_secs: float = 1.0):
 
 def pair_coeff(rms_i, rms_j, spans, frame: float):
     """median(rms_i/rms_j) over frames of `spans` where j is audible."""
-    import numpy as _np
     ratios = []
     for a, b in spans:
         lo, hi = int(a / frame), int(b / frame)
@@ -123,7 +122,7 @@ def pair_coeff(rms_i, rms_j, spans, frame: float):
         ri, rj = ri[:m], rj[:m]
         keep = rj > 0.02
         ratios.extend((ri[keep] / rj[keep]).tolist())
-    return float(_np.median(ratios)) if len(ratios) >= 8 else None
+    return float(np.median(ratios)) if len(ratios) >= 8 else None
 
 
 def bleed_expected(coeffs: dict, spk: str, others_rms: dict) -> float | None:
@@ -188,7 +187,15 @@ def main() -> None:
     if mode not in ("laughs", "all", "none"):
         sys.exit("--restore-sounds must be laughs|all|none")
     if mode == "none":
-        print("non-speech restore disabled (--restore-sounds none)")
+        # disabled is not "leave stale pastes": entries from an earlier
+        # laughs/all run must be stripped (review 10-10 #3)
+        ru_path = work / "segments_ru.json"
+        ru = json.loads(ru_path.read_text())
+        before = len(ru["segments"])
+        ru["segments"] = [s for s in ru["segments"] if not s.get("auto_track")]
+        ru_path.write_text(json.dumps(ru, ensure_ascii=False, indent=1))
+        print(f"non-speech restore disabled: stripped "
+              f"{before - len(ru['segments'])} previous auto pastes")
         return
     debug = flag("--debug")
     label_on = not flag("--no-label")

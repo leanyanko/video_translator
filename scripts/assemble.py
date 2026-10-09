@@ -198,46 +198,57 @@ if flag("--music"):
     bed = AudioSegment.from_file(music_path).set_frame_rate(SR).set_channels(2)
     if music_gain:
         bed = bed + music_gain
-    if "--mute-lone-sfx" in sys.argv:
-        # The editor's bed carries quiet foley (page flips, prop
-        # handling) that the ORIGINAL speech masked; where the dub's
-        # phrasing leaves a pause, such a transient pokes out alone.
-        # Duck ONLY frames where the bed is quiet (foley, not jingle)
-        # AND the dub is silent around them. All in numpy: the first
-        # pydub draft concatenated 100 ms pieces, which is O(n²) copying
-        # (terabytes on a full episode bed — reviewer catch 10-10).
+    if flag("--mute-lone-sfx"):
+        # Duck LONE FOLEY in the bed (page flips poking out in dub
+        # pauses). The decision lives in audio_utils.lone_sfx_gain —
+        # "pokes out above the bed's own level next to speech", NOT
+        # "quiet": a level-only rule pumped underscore music by 40 dB
+        # in every pause (review 10-10). Gains are ramped (20 ms) and
+        # the bed/canvas are processed in CHUNKS so a 2-hour episode
+        # never holds two float32 copies in memory.
+        from audio_utils import lone_sfx_gain, smooth_gain
         FR_S = 0.1
-        SFX_THR = 10 ** (-22 / 20)   # bed above this = jingle, keep
-        NOISE_FLOOR = 10 ** (-60 / 20)
-        DUB_SIL = 10 ** (-38 / 20)
-        DUCK = 10 ** (-40 / 20)      # lone foley: effectively mute
-        REACH = 3                    # ±300 ms of dub silence required
         fr = int(SR * FR_S)
-        bs = np.array(bed.get_array_of_samples(), dtype=np.float32)
-        bs = bs.reshape(-1, bed.channels) / (1 << (8 * bed.sample_width - 1))
-        cv = np.array(canvas.get_array_of_samples(), dtype=np.float32)
-        cv = cv.reshape(-1, canvas.channels) / (1 << (8 * canvas.sample_width - 1))
-        n = len(bs) // fr
-        def frames_rms(x, m):
-            mono = x[: m * fr].mean(axis=1)
-            return np.sqrt((mono.reshape(m, fr) ** 2).mean(axis=1))
-        bed_rms = frames_rms(bs, n)
-        m = min(n, len(cv) // fr)
+        full = 1 << (8 * bed.sample_width - 1)
+
+        def frames_rms_chunked(seg, m):
+            out = np.empty(m, np.float32)
+            step = 600  # frames per chunk (~60 s)
+            raw = seg.raw_data
+            ch, wid = seg.channels, seg.sample_width
+            dt = {1: np.int8, 2: np.int16, 4: np.int32}[wid]
+            for i in range(0, m, step):
+                j = min(i + step, m)
+                buf = np.frombuffer(
+                    raw[i * fr * ch * wid: j * fr * ch * wid], dtype=dt)
+                x = buf.astype(np.float32).reshape(-1, ch).mean(axis=1) / full
+                out[i:j] = np.sqrt((x.reshape(j - i, fr) ** 2).mean(axis=1))
+            return out
+
+        n = len(bed) // fr
+        m = min(n, len(canvas) // fr)
+        bed_rms = frames_rms_chunked(bed, n)
         dub_loud = np.zeros(n, bool)
-        dub_loud[:m] = frames_rms(cv, m) > DUB_SIL
-        near_speech = np.zeros(n, bool)
-        for d in range(-REACH, REACH + 1):
-            lo, hi = max(0, d), n + min(0, d)
-            near_speech[lo:hi] |= dub_loud[max(0, -d): n - max(0, d)]
-        lone = (bed_rms < SFX_THR) & (bed_rms > NOISE_FLOOR) & ~near_speech
-        gain = np.ones(n, dtype=np.float32)
-        gain[lone] = DUCK
-        gains = np.repeat(gain, fr)[:, None]
-        bs[: n * fr] *= gains
-        ints = (np.clip(bs, -1, 1) * ((1 << (8 * bed.sample_width - 1)) - 1))
-        bed = bed._spawn(ints.astype(
-            {1: np.int8, 2: np.int16, 4: np.int32}[bed.sample_width]).tobytes())
-        print(f"lone-SFX gate: muted {lone.sum() * FR_S:.1f}s of quiet foley "
+        dub_loud[:m] = frames_rms_chunked(canvas, m) > 10 ** (-38 / 20)
+        gain_f = lone_sfx_gain(bed_rms, dub_loud)
+        if (gain_f < 1.0).any():
+            dt = {1: np.int8, 2: np.int16, 4: np.int32}[bed.sample_width]
+            raw = bed.raw_data
+            ch, wid = bed.channels, bed.sample_width
+            out = bytearray(raw)
+            ramp = int(0.02 * SR)
+            gains = smooth_gain(gain_f, fr, ramp)
+            step = 600
+            for i in range(0, n, step):
+                j = min(i + step, n)
+                sl = slice(i * fr * ch * wid, j * fr * ch * wid)
+                buf = np.frombuffer(raw[sl], dtype=dt).astype(np.float32)
+                g = np.repeat(gains[i * fr: j * fr], ch)
+                buf *= g[: len(buf)]
+                out[sl] = np.clip(buf, -full, full - 1).astype(dt).tobytes()
+            bed = bed._spawn(bytes(out))
+        ducked = float((gain_f < 1.0).sum()) * FR_S
+        print(f"lone-SFX gate: ducked {ducked:.1f}s of poking foley "
               "in dub pauses")
     canvas = canvas.overlay(bed, position=0)
     print(f"mixed music bed {music_path.name} ({music_gain:+.1f} dB)")

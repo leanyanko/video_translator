@@ -154,3 +154,81 @@ def raw_stem_source(work):
         return meta["speakers"], work / "tracks_raw"
     meta = json.loads((work / "tracks.json").read_text())
     return meta["speakers"], work / "tracks"
+
+
+def lone_sfx_gain(bed_rms, dub_loud, reach: int = 3,
+                  poke_ratio: float = 2.0, max_run: int = 15,
+                  duck: float = 0.01, noise_floor: float = 1e-3):
+    """Per-frame gain that ducks LONE FOLEY in the music bed.
+
+    Foley's distinguishing property is not that it is quiet — an
+    editor's underscore sits at −25..−35 dBFS too — but that it POKES
+    OUT: louder than the bed's own level in the nearest speech-covered
+    frames on either side (review 10-10: a level-only gate pumped the
+    music by 40 dB in every dub pause). Rules per frame:
+      lone   = no dub speech within ±reach frames;
+      ref    = bed level at the nearest NON-lone frame each side (max);
+      foley  = lone and bed > poke_ratio × max(ref, noise_floor)
+               and the lone run is ≤ max_run frames (longer = music).
+    Returns float32 gains (1.0 or duck); caller ramps the steps.
+    """
+    import numpy as np
+    n = len(bed_rms)
+    bed_rms = np.asarray(bed_rms, dtype=np.float32)
+    near_speech = np.zeros(n, bool)
+    for d in range(-reach, reach + 1):
+        lo, hi = max(0, d), n + min(0, d)
+        near_speech[lo:hi] |= np.asarray(dub_loud, bool)[max(0, -d): n - max(0, d)]
+    lone = ~near_speech
+    # reference bed level: nearest frame UNDER ACTUAL SPEECH each side.
+    # Anchoring on merely speech-ADJACENT frames lets a foley burst that
+    # straddles the speech boundary become its own reference and pass.
+    anchors = np.asarray(dub_loud, bool)
+    ref_l = np.zeros(n, np.float32)
+    cur = 0.0
+    for i in range(n):
+        if anchors[i]:
+            cur = bed_rms[i]
+        ref_l[i] = cur
+    ref_r = np.zeros(n, np.float32)
+    cur = 0.0
+    for i in range(n - 1, -1, -1):
+        if anchors[i]:
+            cur = bed_rms[i]
+        ref_r[i] = cur
+    # MIN of the two sides: a continuous bed is symmetric (min = its
+    # level, passes), while foley straddling one speech edge poisons
+    # only ITS side's anchor — the opposite side stays honest and low.
+    ref = np.minimum(ref_l, ref_r)
+    pokes = lone & (bed_rms > poke_ratio * np.maximum(ref, noise_floor)) \
+            & (bed_rms > noise_floor)
+    # cap run length: a long "transient" is music, not foley
+    gain = np.ones(n, np.float32)
+    i = 0
+    while i < n:
+        if not pokes[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and lone[j] and bed_rms[j] > noise_floor:
+            j += 1
+        if (j - i) <= max_run:
+            gain[i:j][pokes[i:j]] = duck
+        i = j
+    return gain
+
+
+def smooth_gain(gain_frames, frame_len: int, ramp_len: int):
+    """Expand per-frame gains to per-sample and ramp the steps with a
+    moving average (hard 1.0→0.01 steps click on entry/exit)."""
+    import numpy as np
+    g = np.repeat(np.asarray(gain_frames, np.float32), frame_len)
+    if ramp_len <= 1:
+        return g
+    c = np.cumsum(np.concatenate(([0.0], g)))
+    out = np.empty_like(g)
+    half = ramp_len // 2
+    idx_hi = np.minimum(np.arange(len(g)) + half + 1, len(g))
+    idx_lo = np.maximum(np.arange(len(g)) - half, 0)
+    out = (c[idx_hi] - c[idx_lo]) / (idx_hi - idx_lo)
+    return out.astype(np.float32)
