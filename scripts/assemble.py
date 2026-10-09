@@ -64,11 +64,20 @@ def trim_silence(path: Path, out_path: Path) -> Path | None:
     data, sr = sf_.read(path, dtype="float32")
     if data.ndim > 1:
         data = data.mean(axis=1)
-    voiced = np.where(np.abs(data) > TRIM_THRESHOLD)[0]
-    if len(voiced) == 0:
+    # threshold relative to the clip's own loudness: F5 also paints
+    # quiet lead/tail mumble and breaths ABOVE the absolute floor, which
+    # then delays the line by their length (qc_tts.py's LEAD flag). RMS
+    # over 20 ms frames, not raw samples — a single click must not count
+    # as speech onset.
+    n = len(data) // (sr // 50)
+    frame = sr // 50
+    rms = np.sqrt((data[: n * frame].reshape(n, frame) ** 2).mean(axis=1))
+    thr = max(TRIM_THRESHOLD, 0.1 * float(np.percentile(rms, 99)))
+    voiced_f = np.where(rms > thr)[0]
+    if len(voiced_f) == 0:
         return None
-    lo = max(0, voiced[0] - int(TRIM_MARGIN * sr))
-    hi = min(len(data), voiced[-1] + int(TRIM_MARGIN * sr))
+    lo = max(0, voiced_f[0] * frame - int(TRIM_MARGIN * sr))
+    hi = min(len(data), (voiced_f[-1] + 1) * frame + int(TRIM_MARGIN * sr))
     sf_.write(out_path, data[lo:hi], sr)
     return out_path
 

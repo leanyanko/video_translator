@@ -55,6 +55,31 @@ def apply_name_stress(text_ru: str) -> str:
     return WORD_RE.sub(sub, text_ru)
 
 
+def force_name_stress(accented_text: str) -> str:
+    """Apply the names dictionary OVER already-accented text.
+
+    apply_name_stress skips words that carry a '+' — correct for
+    translator marks, but RUAccent marks everything, so on RUAccent
+    output the dictionary silently lost every fight (seen: RUAccent's
+    «Гельб+арта» surviving over the dictionary's «Г+ельберта»;
+    respelled stems never matched at all because the word in the text
+    keeps the original spelling). Here the token's own marks are
+    stripped before stem matching and a dictionary hit always wins.
+    Translator marks are reapplied AFTER this in accent_texts.py, so
+    they still have the last word.
+    """
+    def sub(m):
+        token = m.group(0)
+        plain = token.replace("+", "")
+        low = plain.lower()
+        for stem in NAME_STEMS:
+            if low.startswith(stem):
+                return _restress(plain, NAMES[stem], len(stem))
+        return token
+
+    return WORD_RE.sub(sub, accented_text)
+
+
 def apply_homographs(text_ru: str, text_en: str | None) -> str:
     en = (text_en or "").lower()
 

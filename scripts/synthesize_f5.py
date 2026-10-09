@@ -71,19 +71,99 @@ if limit_secs is not None:
 
 outdir = work / "tts_f5"
 outdir.mkdir(exist_ok=True)
-if only_ids is not None:
-    todo = [s for s in segments if s["id"] in only_ids]
-else:
-    todo = [s for s in segments if not (outdir / f"seg_{s['id']:04d}.wav").exists()]
-todo.sort(key=lambda s: (s["speaker"], s["start"]))
-print(f"{len(todo)} of {len(segments)} segments to synthesize")
-if not todo:
-    sys.exit(0)
 
 # stress marks are pre-computed by scripts/accent_texts.py in a separate
 # process — RUAccent and F5 deadlock when loaded together
 accents_path = work / "accents.json"
 accents = json.loads(accents_path.read_text()) if accents_path.exists() else {}
+
+# ── consistency guards ──────────────────────────────────────────────
+# Both exist because their absence shipped broken audio (e1v5): a run
+# whose translation was edited after accent_texts.py sang the OLD text
+# with the OLD stresses, and clips carried over from earlier runs were
+# never invalidated.
+import hashlib
+import re as _re
+
+
+from stress_rules import force_name_stress as _fns  # noqa: E402
+
+
+def _norm(t: str) -> str:
+    # same tolerance as check_pipeline.py: marks, ёfication, respellings
+    t = _fns(t or "")
+    t = t.replace("+", "").replace("ё", "е").replace("Ё", "Е").lower()
+    return _re.sub(r"\s+", " ", _re.sub(r"[^\w ]+", " ", t)).strip()
+
+
+# 1. accents.json must exist and match the CURRENT translation; a stale
+#    or missing entry means accent_texts.py was not re-run after editing
+bad = [s["id"] for s in segments
+       if str(s["id"]) not in accents
+       or _norm(accents[str(s["id"])]) != _norm(s.get("text_ru", ""))]
+if bad and "--allow-plain" not in sys.argv:
+    print(f"ERROR: {len(bad)} segment(s) have missing or STALE stress marks "
+          f"(accents.json does not match segments_ru.json): {bad[:20]}"
+          f"{'...' if len(bad) > 20 else ''}\n"
+          "Run  venv-f5/bin/python scripts/accent_texts.py "
+          f"{work}  first (or pass --allow-plain to sing without marks).")
+    sys.exit(2)
+
+# 2. content manifest: seg id -> sha1(speaker | accented text | ref hash).
+#    A clip whose hash no longer matches is re-synthesized, so edited
+#    translations, new accents or new refs can never ship stale audio.
+#    No manifest yet (pre-manifest run) = existing clips are adopted as
+#    the baseline, same semantics as redub.py.
+manifest_path = outdir / "manifest.json"
+_ref_sha = {}
+
+
+def ref_sha(spk: str) -> str:
+    if spk not in _ref_sha:
+        p = REFS / f"{spk}.wav"
+        _ref_sha[spk] = hashlib.sha1(p.read_bytes()).hexdigest()[:12] if p.exists() else "noref"
+    return _ref_sha[spk]
+
+
+def seg_hash(s) -> str:
+    text = accents.get(str(s["id"]), s.get("text_ru", ""))
+    return hashlib.sha1(
+        f"{s['speaker']}|{text}|{ref_sha(s['speaker'])}".encode()).hexdigest()
+
+
+if manifest_path.exists():
+    manifest = json.loads(manifest_path.read_text())
+else:
+    manifest = {}
+    existing = [s for s in segments
+                if (outdir / f"seg_{s['id']:04d}.wav").exists()]
+    if existing and "--adopt-existing" in sys.argv:
+        # explicit opt-in for pre-manifest dirs KNOWN to match the
+        # current text/accents/refs (e.g. a run finished minutes ago)
+        manifest = {str(s["id"]): seg_hash(s) for s in existing}
+        print(f"manifest bootstrap: adopting {len(manifest)} existing clips "
+              "as matching the current script (--adopt-existing)")
+    elif existing:
+        print(f"NOTE: {len(existing)} clips exist but there is no manifest — "
+              "they cannot be verified against the current script and WILL "
+              "be re-synthesized. If you are sure they match, rerun with "
+              "--adopt-existing.")
+
+if only_ids is not None:
+    todo = [s for s in segments if s["id"] in only_ids]
+else:
+    todo = [s for s in segments
+            if not (outdir / f"seg_{s['id']:04d}.wav").exists()
+            or manifest.get(str(s["id"])) != seg_hash(s)]
+    n_stale = sum(1 for s in todo if (outdir / f"seg_{s['id']:04d}.wav").exists())
+    if n_stale:
+        print(f"{n_stale} existing clip(s) are stale (text/accents/ref "
+              "changed) and will be re-synthesized")
+todo.sort(key=lambda s: (s["speaker"], s["start"]))
+print(f"{len(todo)} of {len(segments)} segments to synthesize")
+manifest_path.write_text(json.dumps(manifest, indent=1))
+if not todo:
+    sys.exit(0)
 
 tts = F5TTS(model="F5TTS_v1_Base", ckpt_file=str(CKPT), vocab_file=str(VOCAB))
 
@@ -143,6 +223,8 @@ for n, seg in enumerate(todo, 1):
     sf.write(
         outdir / f"seg_{seg['id']:04d}.wav", np.concatenate(waves), sr_out
     )
+    manifest[str(seg["id"])] = seg_hash(seg)
+    manifest_path.write_text(json.dumps(manifest, indent=1))
     rate = (time.time() - t_start) / n
     print(f"[{n}/{len(todo)}] seg {seg['id']:04d} {spk} "
           f"({time.time()-t0:.1f}s, avg {rate:.1f}s/seg)", flush=True)
