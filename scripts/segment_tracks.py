@@ -247,6 +247,9 @@ for s in segments:
     if ws:
         s["_conf"] = sum(w["prob"] for w in ws) / len(ws)
 
+from audio_utils import raw_stem_source  # noqa: E402
+
+paste_speakers, paste_dir = raw_stem_source(work)
 nonverbal_dir = work / "nonverbal"
 n_nonverbal = n_lowconf = n_flagged = 0
 for s in segments:
@@ -264,7 +267,7 @@ for s in segments:
     subprocess.check_call([
         "ffmpeg", "-y", "-v", "error", "-ss", f"{s['start']:.3f}",
         "-t", f"{s['end'] - s['start']:.3f}",
-        "-i", str(work / "tracks" / tracks_meta["speakers"][s["speaker"]]),
+        "-i", str(paste_dir / paste_speakers[s["speaker"]]),
         "-ar", "44100", "-ac", "1", str(wav)])
     s["type"] = "orig"
     s["file"] = f"nonverbal/{wav.name}"

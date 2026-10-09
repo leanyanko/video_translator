@@ -79,8 +79,65 @@ def subtract_speech(islands, speech_spans, margin=MARGIN, min_secs=MIN_SOUND):
 
 def bleed_dropped(own_rms: float, others_max: float,
                   ratio: float = BLEED_RATIO) -> bool:
-    """Someone else's voice in this mic? (their stem dwarfs this one)"""
+    """Fallback bleed test when a mic pair has no calibration:
+    someone else's voice in this mic (their stem dwarfs this one)."""
     return others_max >= ratio * max(own_rms, 1e-6)
+
+
+# ── per-mic-pair bleed calibration (reviewer 10-10) ───────────────────
+# A fixed cross-stem ratio drops a quiet laugh over loud speech (the
+# 6-7× zone). Physics is per pair: over spans where ONLY speaker j
+# talks, median(RMS_mic_i / RMS_stem_j) IS mic i's bleed coefficient
+# for j. A candidate on mic i is his own sound when it exceeds
+# OWN_OVER_BLEED× what j's bleed alone would produce.
+OWN_OVER_BLEED = 3.0
+
+
+def solo_spans(speech: dict, spk: str, min_secs: float = 1.0):
+    """Spans where spk talks and nobody else does."""
+    others = sorted(sp for o, ss in speech.items() if o != spk for sp in ss)
+    out = []
+    for a, b in speech.get(spk, []):
+        cur = a
+        for sa, sb in others:
+            if sb <= cur or sa >= b:
+                continue
+            if sa > cur:
+                out.append((cur, sa))
+            cur = max(cur, sb)
+        if cur < b:
+            out.append((cur, b))
+    return [(a, b) for a, b in out if b - a >= min_secs]
+
+
+def pair_coeff(rms_i, rms_j, spans, frame: float):
+    """median(rms_i/rms_j) over frames of `spans` where j is audible."""
+    import numpy as _np
+    ratios = []
+    for a, b in spans:
+        lo, hi = int(a / frame), int(b / frame)
+        ri, rj = rms_i[lo:hi], rms_j[lo:hi]
+        m = min(len(ri), len(rj))
+        if not m:
+            continue
+        ri, rj = ri[:m], rj[:m]
+        keep = rj > 0.02
+        ratios.extend((ri[keep] / rj[keep]).tolist())
+    return float(_np.median(ratios)) if len(ratios) >= 8 else None
+
+
+def bleed_expected(coeffs: dict, spk: str, others_rms: dict) -> float | None:
+    """Max bleed any other speaker's current loudness would explain;
+    None when some audible pair is uncalibrated."""
+    worst = 0.0
+    for o, rj in others_rms.items():
+        c = coeffs.get((spk, o))
+        if c is None:
+            if rj > 0.02:
+                return None
+            continue
+        worst = max(worst, c * rj)
+    return worst
 
 
 # ── laugh discrimination (mode --restore-sounds laughs) ───────────────
@@ -91,6 +148,10 @@ def bleed_dropped(own_rms: float, others_max: float,
 LAUGH_MIN_SECS = 0.7
 LAUGH_MIN_BURSTS = 2
 LAUGH_PANNS_THR = 0.05
+# burst counting needs to RESOLVE 4-6 Hz laugh pulses: 30 ms envelope
+# (the 0.25 s scan frames sit at Nyquist and smear "ha-ha-ha" into one
+# lump — reviewer catch 10-10)
+BURST_FRAME_SECS = 0.03
 
 
 def envelope_bursts(env) -> int:
@@ -135,13 +196,8 @@ def main() -> None:
     only_spk = opt("--speakers", None, lambda v: set(v.split(",")))
 
     # RAW stems when they exist — clean_stems mutes exactly these sounds
-    if (work / "tracks_raw.json").exists():
-        tracks_meta = json.loads((work / "tracks_raw.json").read_text())
-        tracks_dir = work / "tracks_raw"
-    else:
-        tracks_meta = json.loads((work / "tracks.json").read_text())
-        tracks_dir = work / "tracks"
-    speakers = tracks_meta["speakers"]
+    from audio_utils import raw_stem_source
+    speakers, tracks_dir = raw_stem_source(work)
 
     ru = json.loads((work / "segments_ru.json").read_text())
     speech, origs = {}, {}
@@ -163,6 +219,19 @@ def main() -> None:
                                               int(a / SCAN_FRAME) + 1)]
         return float(r.mean()) if len(r) else 0.0
 
+    coeffs = {}
+    for i in speakers:
+        for j in speakers:
+            if i == j:
+                continue
+            c = pair_coeff(rms[i], rms[j], solo_spans(speech, j), SCAN_FRAME)
+            if c is not None:
+                coeffs[(i, j)] = c
+    if coeffs:
+        print("bleed coefficients: " + ", ".join(
+            f"{i[-2:]}<-{j[-2:]}={c:.3f}" for (i, j), c in sorted(coeffs.items())),
+            flush=True)
+
     found = []
     for spk, fname in speakers.items():
         if only_spk and spk not in only_spk:
@@ -176,11 +245,16 @@ def main() -> None:
               f"{len(cands)} non-speech candidates", flush=True)
         for a, b in cands:
             own = span_rms(spk, a, b)
-            others = max((span_rms(o, a, b) for o in audios if o != spk),
-                         default=0.0)
+            others_rms = {o: span_rms(o, a, b) for o in audios if o != spk}
+            others = max(others_rms.values(), default=0.0)
+            expected = bleed_expected(coeffs, spk, others_rms)
             verdict = None
             if own < ABS_FLOOR:
                 verdict = "too quiet"
+            elif expected is not None:
+                if own <= OWN_OVER_BLEED * expected:
+                    verdict = (f"bleed (own {own:.3f} <= {OWN_OVER_BLEED}x"
+                               f"expected {expected:.3f})")
             elif bleed_dropped(own, others):
                 verdict = f"bleed (others {others:.3f} vs own {own:.3f})"
             if debug or verdict is None:
@@ -215,9 +289,11 @@ def main() -> None:
 
     if mode == "laughs":
         kept = []
+        burst_n = int(BURST_FRAME_SECS * SCAN_SR)
         for f in found:
             a, b = f["start"], f["end"]
-            env = rms[f["speaker"]][int(a / SCAN_FRAME): int(b / SCAN_FRAME) + 1]
+            seg = audios[f["speaker"]][int(a * SCAN_SR): int(b * SCAN_SR)]
+            env = frame_rms(seg, burst_n)
             bursts = envelope_bursts(env)
             panns = f.pop("_panns_laugh", 0.0)
             keep = is_laugh(b - a, bursts, panns)

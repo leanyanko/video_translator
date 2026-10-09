@@ -217,13 +217,18 @@ def main() -> None:
     run("qc: back-transcribe every clip",
         [PY, SCRIPTS / "qc_tts.py", work])
 
-    if multitrack and not (work / "laughs").is_dir():
-        restore = (sys.argv[sys.argv.index("--restore-sounds") + 1]
-                   if "--restore-sounds" in sys.argv else "laughs")
-        if restore != "none":
+    if multitrack:
+        sys.path.insert(0, str(SCRIPTS))
+        from cli_args import opt as _opt
+        restore = _opt("--restore-sounds", "laughs")
+        mode_file = work / "laughs" / ".mode"
+        prev_mode = mode_file.read_text().strip() if mode_file.exists() else None
+        if restore != "none" and prev_mode != restore:
             run(f"restore non-speech sounds off the raw stems ({restore})",
                 [PY, SCRIPTS / "harvest_laughs.py", work,
                  "--restore-sounds", restore])
+            mode_file.parent.mkdir(exist_ok=True)
+            mode_file.write_text(restore)
 
     doctor(work, "before assembly")
 

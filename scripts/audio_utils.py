@@ -135,3 +135,22 @@ def audition(audio: np.ndarray, sr: int = SCAN_SR,
     first = int(np.argmax(voiced))
     last = n - 1 - int(np.argmax(voiced[::-1]))
     return first * frame, (n - 1 - last) * frame, float(voiced.mean())
+
+
+def raw_stem_source(work):
+    """(speakers map, stems dir) preferring the RAW stems.
+
+    Original-audio pastes (laughs, backchannels, low-confidence lines)
+    must be cut from tracks_raw/: clean_stems.py builds voice profiles
+    from SPEECH, so it can mute exactly these owner sounds on the
+    cleaned copies — a paste from tracks/ may then be silence dressed
+    up as restored original (review 10-09 finding #7).
+    """
+    import json
+    from pathlib import Path
+    work = Path(work)
+    if (work / "tracks_raw.json").exists():
+        meta = json.loads((work / "tracks_raw.json").read_text())
+        return meta["speakers"], work / "tracks_raw"
+    meta = json.loads((work / "tracks.json").read_text())
+    return meta["speakers"], work / "tracks"

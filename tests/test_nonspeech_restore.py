@@ -45,22 +45,29 @@ class BleedRatioTest(unittest.TestCase):
         self.assertFalse(bleed_dropped(0.05, 0.0))
 
 
-if __name__ == "__main__":
-    unittest.main()
+
+def pulse_train(n_pulses, period_frames=8, width=3, hi=0.06, lo=0.008):
+    """Realistic 30 ms-frame laugh envelope: 4-6 Hz pulses = period of
+    ~6-8 frames (reviewer: the old 0.25 s frames sat at Nyquist)."""
+    env = []
+    for _ in range(n_pulses):
+        env += [lo] * (period_frames - width) + [hi] * width
+    return env + [lo] * 3
 
 
 class LaughSignatureTest(unittest.TestCase):
-    def test_pulsed_envelope_is_a_laugh(self):
+    def test_4hz_pulse_train_is_a_laugh(self):
         from harvest_laughs import envelope_bursts, is_laugh
-        env = [0.01, 0.06, 0.01, 0.055, 0.012, 0.05, 0.01]  # ha-ha-ha
-        self.assertGreaterEqual(envelope_bursts(env), 2)
-        self.assertTrue(is_laugh(2.3, envelope_bursts(env), 0.0))
+        env = pulse_train(4)  # "ha-ha-ha-ha" at ~4 Hz on 30 ms frames
+        self.assertGreaterEqual(envelope_bursts(env), 3)
+        self.assertTrue(is_laugh(1.0, envelope_bursts(env), 0.0))
 
     def test_flat_hum_is_not_a_laugh(self):
         from harvest_laughs import envelope_bursts, is_laugh
-        env = [0.02, 0.05, 0.055, 0.05, 0.02]  # one flat "mm"
+        # one sustained "mm": rises, holds ~0.6 s, falls — 20 frames
+        env = [0.01] + [0.05] * 20 + [0.01]
         self.assertEqual(envelope_bursts(env), 1)
-        self.assertFalse(is_laugh(0.5, envelope_bursts(env), 0.0))
+        self.assertFalse(is_laugh(0.66, envelope_bursts(env), 0.0))
 
     def test_breathy_laugh_saved_by_low_panns_vote(self):
         from harvest_laughs import is_laugh
@@ -69,3 +76,62 @@ class LaughSignatureTest(unittest.TestCase):
     def test_short_grunt_fails_both_votes(self):
         from harvest_laughs import is_laugh
         self.assertFalse(is_laugh(0.5, 1, 0.01))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class BleedCalibrationTest(unittest.TestCase):
+    def test_solo_spans_subtract_other_speakers(self):
+        from harvest_laughs import solo_spans
+        speech = {"A": [(0.0, 10.0)], "B": [(4.0, 6.0)]}
+        self.assertEqual(solo_spans(speech, "A"), [(0.0, 4.0), (6.0, 10.0)])
+
+    def test_calibrated_quiet_laugh_over_loud_speech_kept(self):
+        from harvest_laughs import bleed_expected, OWN_OVER_BLEED
+        # mic separation -26 dB: coeff 0.05; Dan talks at 0.3
+        coeffs = {("M", "D"): 0.05}
+        exp = bleed_expected(coeffs, "M", {"D": 0.3})
+        self.assertAlmostEqual(exp, 0.015)
+        own = 0.05  # quiet laugh, old fixed 6x rule would have dropped it
+        self.assertGreater(own, OWN_OVER_BLEED * exp)
+
+    def test_calibrated_pure_bleed_dropped(self):
+        from harvest_laughs import bleed_expected, OWN_OVER_BLEED
+        coeffs = {("M", "D"): 0.05}
+        exp = bleed_expected(coeffs, "M", {"D": 0.3})
+        self.assertLessEqual(0.017, OWN_OVER_BLEED * exp + 0.03)  # ~expected level
+
+    def test_uncalibrated_audible_pair_falls_back(self):
+        from harvest_laughs import bleed_expected
+        self.assertIsNone(bleed_expected({}, "M", {"D": 0.3}))
+
+    def test_silent_others_need_no_calibration(self):
+        from harvest_laughs import bleed_expected
+        self.assertEqual(bleed_expected({}, "M", {"D": 0.001}), 0.0)
+
+
+class RawStemSourceTest(unittest.TestCase):
+    def test_prefers_raw_when_present(self):
+        import json, tempfile
+        from audio_utils import raw_stem_source
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Path(tmp)
+            (w / "tracks.json").write_text(json.dumps(
+                {"speakers": {"S": "clean.flac"}}))
+            (w / "tracks_raw.json").write_text(json.dumps(
+                {"speakers": {"S": "raw.flac"}}))
+            spk, d = raw_stem_source(w)
+            self.assertEqual(spk["S"], "raw.flac")
+            self.assertEqual(d.name, "tracks_raw")
+
+    def test_falls_back_to_tracks(self):
+        import json, tempfile
+        from audio_utils import raw_stem_source
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Path(tmp)
+            (w / "tracks.json").write_text(json.dumps(
+                {"speakers": {"S": "only.flac"}}))
+            spk, d = raw_stem_source(w)
+            self.assertEqual(d.name, "tracks")
