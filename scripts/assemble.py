@@ -23,6 +23,9 @@ work = Path(sys.argv[1])
 tts_name = sys.argv[sys.argv.index("--tts-dir") + 1] if "--tts-dir" in sys.argv else "tts"
 out_name = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else "video_ru.mp4"
 segments = json.loads((work / "segments_ru.json").read_text())["segments"]
+# "echo": a listener repeating the speaker's words as he says them
+# (scripts/repeat_audit.py --mark-echo) — dubbed, it would be heard twice
+segments = [s for s in segments if not s.get("echo")]
 # "overlap": true segments are deliberately CONCURRENT speech (speaker B
 # talking over speaker A): they are excluded from the sequential timeline
 # (no slot math, no cursor) and overlaid afterwards at their own start

@@ -78,6 +78,8 @@ for spk in sorted({w["speaker"] for w in words}):
         span = audio[int(w["start"] * 16000): int(w["end"] * 16000)]
         rms.append(float(np.sqrt((span ** 2).mean())) if len(span) else 0.0)
     thr = max(BLEED_FLOOR, BLEED_FRACTION * float(np.percentile(rms, 95)))
+    for w, r in zip(ws, rms):
+        w["_rms"] = r  # own-stem loudness, for the cross-track echo pass
     good = [w for w, r in zip(ws, rms) if r >= thr]
     print(f"{spk}: bleed filter thr={thr:.4f} dropped "
           f"{len(ws) - len(good)}/{len(ws)} words")
@@ -85,16 +87,62 @@ for spk in sorted({w["speaker"] for w in words}):
 words = sorted(kept, key=lambda w: (w["start"], w["end"]))
 del kept
 
+# word-level cross-track echo: a mic close to another speaker picks up
+# whole phrases loud enough to pass the bleed filter (seen: the host's
+# questions transcribed on the guest's stem at confidence ~1.0, which
+# would then be dubbed in the GUEST's voice). The same word on two stems
+# within ECHO_WORD_DT belongs to the stem where it is louder; the quieter
+# copy is dropped when it is part of a run of ≥ ECHO_WORD_RUN such words —
+# echoes come as phrases, while two people saying "yeah" at once don't.
+ECHO_WORD_DT, ECHO_WORD_RATIO, ECHO_WORD_RUN = 0.6, 0.9, 3
+import bisect  # noqa: E402
+
+def _key(w):
+    return "".join(c for c in w["word"].lower() if c.isalnum())
+
+starts = [w["start"] for w in words]
+echoed = set()
+for i, w in enumerate(words):
+    k = _key(w)
+    if not k:
+        continue
+    j = bisect.bisect_left(starts, w["start"] - ECHO_WORD_DT)
+    while j < len(words) and words[j]["start"] <= w["start"] + ECHO_WORD_DT:
+        o = words[j]
+        if (o["speaker"] != w["speaker"] and _key(o) == k
+                and w["_rms"] < ECHO_WORD_RATIO * o["_rms"]):
+            echoed.add(id(w))
+            break
+        j += 1
+drop = set()
+for spk in {w["speaker"] for w in words}:
+    own = [w for w in words if w["speaker"] == spk]
+    run = []
+    for w in own + [None]:
+        if w is not None and id(w) in echoed:
+            run.append(w)
+            continue
+        if len(run) >= ECHO_WORD_RUN:
+            drop.update(id(x) for x in run)
+        run = []
+n_echo_words = len(drop)
+words = [w for w in words if id(w) not in drop]
+print(f"cross-track echo: dropped {n_echo_words} words heard louder on another stem")
+
 GAP_BREAK = 2.5      # sec; a silence this long always ends the sentence
-MAX_SENT_SECS = 18.0  # whisper sometimes loses punctuation for minutes —
-                      # split such run-ons at their largest internal pauses
+MAX_SENT_SECS = 25.0  # longer sentences are split (whisper sometimes loses
+                      # punctuation, and very long lines are hard to dub):
+                      # at the largest pause after a comma (a clause
+                      # boundary, translatable on its own); at the largest
+                      # pause only when the sentence has no commas
 
 
 def split_long(ws: list) -> list[list]:
     if ws[-1]["end"] - ws[0]["start"] <= MAX_SENT_SECS or len(ws) < 2:
         return [ws]
     gaps = [(ws[i + 1]["start"] - ws[i]["end"], i) for i in range(len(ws) - 1)]
-    _, cut = max(gaps)
+    clause = [g for g in gaps if ws[g[1]]["word"].strip().endswith((",", ";", ":", "—"))]
+    _, cut = max(clause or gaps)
     return split_long(ws[: cut + 1]) + split_long(ws[cut + 1:])
 
 
@@ -215,10 +263,32 @@ segments = [s for s in segments if not s.get("_drop")]
 
 # 3. non-verbal vocalizations (mm-hmm, hmm, laughter-as-text): paste the
 #    original sound from the solo stem instead of synthesizing it
-nonverbal_dir = work / "nonverbal"
-n_nonverbal = 0
+# whisper confidence (words carry "prob" since transcribe_tracks.py kept
+# it): short low-confidence lines are crosstalk/quiet backchannels that
+# whisper garbles ("Prostar my name is Kloé" for "second one") — pasting
+# the speaker's own stem audio keeps the real voice and never translates
+# garbage. Mid-confidence lines are translated but flagged low_conf.
+PASTE_CONF, FLAG_CONF, PASTE_MAX_SECS = 0.5, 0.65, 4.0
+words_by_spk = {}
+for w in words:
+    words_by_spk.setdefault(w["speaker"], []).append(w)
 for s in segments:
-    if not NONVERBAL.match(s["text"].strip()):
+    ws = [w for w in words_by_spk.get(s["speaker"], ())
+          if "prob" in w and w["start"] >= s["start"] - 0.05 and w["end"] <= s["end"] + 0.05]
+    if ws:
+        s["_conf"] = sum(w["prob"] for w in ws) / len(ws)
+
+nonverbal_dir = work / "nonverbal"
+n_nonverbal = n_lowconf = n_flagged = 0
+for s in segments:
+    conf = s.pop("_conf", None)
+    low = (conf is not None and conf < PASTE_CONF
+           and s["end"] - s["start"] <= PASTE_MAX_SECS)
+    if (not low and conf is not None and conf < FLAG_CONF
+            and not NONVERBAL.match(s["text"].strip())):
+        s["low_conf"] = round(conf, 2)
+        n_flagged += 1
+    if not low and not NONVERBAL.match(s["text"].strip()):
         continue
     nonverbal_dir.mkdir(exist_ok=True)
     wav = nonverbal_dir / f"{s['speaker']}_{int(s['start'] * 10):06d}.wav"
@@ -229,8 +299,13 @@ for s in segments:
         "-ar", "44100", "-ac", "1", str(wav)])
     s["type"] = "orig"
     s["file"] = f"nonverbal/{wav.name}"
-    s["label"] = "backchannel"
-    n_nonverbal += 1
+    if low:
+        s["label"] = "low_conf"
+        s["conf"] = round(conf, 2)
+        n_lowconf += 1
+    else:
+        s["label"] = "backchannel"
+        n_nonverbal += 1
 
 for s in segments:
     s.pop("_rms", None)
@@ -238,7 +313,9 @@ for s in segments:
 print(f"housekeeping: {len(dropped_echo)} mic-bleed echoes + "
       f"{len(dropped_frag)} echo fragments dropped, "
       f"{len(dropped_halluc)} hallucinations dropped, "
-      f"{n_nonverbal} non-verbal segments pasted from stems")
+      f"{n_nonverbal} non-verbal segments pasted from stems, "
+      f"{n_lowconf} low-confidence lines pasted from stems, "
+      f"{n_flagged} flagged low_conf for the translator")
 
 # concurrency marking: a segment whose start lies ≥ min_overlap inside
 # ANY other speaker's still-running segment is overlaid, not sequential
@@ -265,6 +342,26 @@ out = {"language": language,
        "speakers": sorted({s["speaker"] for s in segments}),
        "segments": [{"id": i, **s} for i, s in enumerate(segments)]}
 (work / out_name).write_text(json.dumps(out, ensure_ascii=False, indent=1))
+
+# mid-sentence cut report: a segment should end at a sentence end. A
+# cut is legitimate only when the speaker really stopped (another voice
+# fills the gap — an interruption); a cut inside a run-on is a defect.
+runon_cuts, interrupted = [], 0
+for spk in out["speakers"]:
+    own = [s for s in out["segments"]
+           if s["speaker"] == spk and s.get("type") != "orig"]
+    for a, b in zip(own, own[1:]):
+        if a["text"].rstrip().endswith(SENT_END + ('"',)):
+            continue
+        if any(o["speaker"] != spk and o["start"] < b["start"] and o["end"] > a["end"]
+               for o in out["segments"]):
+            interrupted += 1
+        elif b["start"] - a["end"] <= GAP_BREAK:
+            runon_cuts.append(a["id"])
+print(f"mid-sentence ends: {interrupted} at interruptions (ok), "
+      f"{len(runon_cuts)} inside run-ons"
+      + (f" — ids {runon_cuts[:20]}: whisper lost punctuation there, "
+         "fix with repunctuate_words.py and re-segment" if runon_cuts else ""))
 
 counts = {spk: sum(1 for s in out["segments"] if s["speaker"] == spk)
           for spk in out["speakers"]}

@@ -3,7 +3,7 @@
 
 Model: PANNs Cnn14 (AudioSet tagging, CPU; checkpoint in ~/panns_data).
 
-Usage: venv/bin/python scripts/harvest_laughs.py work/<id> [--threshold 0.2]
+Usage: venv/bin/python scripts/harvest_laughs.py work/<id> [--threshold 0.12]
            [--speech-max 0.5] [--dry-run]
 
 Requires work/<id>/tracks.json:
@@ -47,7 +47,7 @@ EDGE_PAD = 0.12      # sec of air kept around the harvested laugh
 COLLIDE_PAD = 0.15   # sec; min clearance from the same speaker's dub
 
 work = Path(sys.argv[1])
-threshold = float(sys.argv[sys.argv.index("--threshold") + 1]) if "--threshold" in sys.argv else 0.2
+threshold = float(sys.argv[sys.argv.index("--threshold") + 1]) if "--threshold" in sys.argv else 0.12
 speech_max = float(sys.argv[sys.argv.index("--speech-max") + 1]) if "--speech-max" in sys.argv else 0.5
 dry_run = "--dry-run" in sys.argv
 
@@ -55,10 +55,14 @@ tracks_meta = json.loads((work / "tracks.json").read_text())
 ru = json.loads((work / "segments_ru.json").read_text())
 # same-speaker dubbed spans (the collision filter); orig segments excluded
 dub_spans = {}
+# same-speaker orig clips already on the timeline (segment_tracks.py
+# nonverbal cuts, manual entries): a laugh found there is a duplicate
+orig_spans = {}
 for s in ru["segments"]:
-    if s.get("type") == "orig":
+    if s.get("auto_track"):
         continue
-    dub_spans.setdefault(s.get("speaker"), []).append((s["start"], s["end"]))
+    spans = orig_spans if s.get("type") == "orig" else dub_spans
+    spans.setdefault(s.get("speaker"), []).append((s["start"], s["end"]))
 
 
 def decode(path: Path, start: float, dur: float, sr: int) -> np.ndarray:
@@ -110,8 +114,8 @@ def voiced_regions(path: Path) -> list[tuple[float, float]]:
     return [(a, b) for a, b in merged if b - a >= MIN_REGION]
 
 
-def collides(spk: str, a: float, b: float) -> bool:
-    for s, e in dub_spans.get(spk, ()):
+def collides(spk: str, a: float, b: float, spans=dub_spans) -> bool:
+    for s, e in spans.get(spk, ()):
         if a < e + COLLIDE_PAD and b > s - COLLIDE_PAD:
             return True
     return False
@@ -193,6 +197,9 @@ for spk, fname in tracks_meta["speakers"].items():
             continue
         if collides(spk, lo, hi):
             print(f"  {lo:8.1f}-{hi:8.1f}  {lab:16s} {sc:.2f}  SKIP (own dub)")
+            continue
+        if collides(spk, lo, hi, orig_spans):
+            print(f"  {lo:8.1f}-{hi:8.1f}  {lab:16s} {sc:.2f}  SKIP (already orig)")
             continue
         wav = laughs_dir / f"{spk}_{int(lo):05d}.wav"
         if not dry_run:

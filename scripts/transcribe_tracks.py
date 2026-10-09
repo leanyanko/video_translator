@@ -87,6 +87,142 @@ def voiced_islands(path: Path) -> list[tuple[float, float]]:
     return [(max(0.0, a - PAD), b + PAD) for a, b in islands]
 
 
+# Whisper conditions each 30 s window on its own previous output. On a
+# long monologue island it can derail and STAY derailed until the pass
+# ends: punctuation vanishes for 15+ min, and words get stretched over
+# many seconds of speech it silently skipped. Measured on a 123-min solo
+# stem (Dan, Gelbart episode): fixed ~30-min chunks (14.9 min still
+# unpunctuated), unconditioned / 5-min retries (12.2 min) barely helped;
+# restarting at the last sentence end before the collapse brought it to
+# 0 min and recovered +351 words. So:
+# 1. adaptive restart — when an 80-word window drops below 4 %
+#    punctuation, keep everything up to the last sentence end before it
+#    and start a fresh pass from there;
+# 2. skipped-speech guard — any word lasting > STRETCH_SECS marks speech
+#    whisper skipped; its sentence(s) are re-transcribed as a short clip
+#    and spliced in when that yields more words.
+PUNCT = (".", ",", "!", "?", "…")
+SENT = (".", "!", "?", "…")
+PUNCT_WIN = 80        # words per sliding check window
+PUNCT_MIN = 0.04      # min share of words carrying punctuation per window
+MIN_ADVANCE = 60.0    # sec; a restart must move forward at least this much
+STRETCH_SECS = 2.0    # a "word" longer than this hides skipped speech
+SPLICE_REACH = 30.0   # sec; how far to look for the sentence ends around it
+
+
+def first_poor(ws: list):
+    """Index of the first word of the first poorly punctuated window."""
+    if len(ws) < PUNCT_WIN:
+        return None
+    marks = [w["word"].strip().endswith(PUNCT) for w in ws]
+    run = sum(marks[:PUNCT_WIN])
+    if run / PUNCT_WIN < PUNCT_MIN:
+        return 0
+    for i in range(PUNCT_WIN, len(marks)):
+        run += marks[i] - marks[i - PUNCT_WIN]
+        if run / PUNCT_WIN < PUNCT_MIN:
+            return i - PUNCT_WIN + 1
+    return None
+
+
+def run_whisper(track: Path, a: float, b: float):
+    """Transcribe [a, b) of the track → (segments, words), timeline-offset."""
+    clip = tmp / "track_island.wav"
+    subprocess.check_call([
+        "ffmpeg", "-y", "-v", "quiet", "-ss", f"{a:.3f}",
+        "-t", f"{b - a:.3f}", "-i", str(track),
+        "-ac", "1", "-ar", "16000", str(clip)])
+    global language
+    r = mlx_whisper.transcribe(
+        str(clip), path_or_hf_repo=MODEL, word_timestamps=True,
+        **({"language": language} if language else {}))
+    clip.unlink(missing_ok=True)
+    language = language or r.get("language")
+    segs, ws = [], []
+    for s in r["segments"]:
+        if s["text"].strip():
+            segs.append({"start": round(s["start"] + a, 3),
+                         "end": round(s["end"] + a, 3), "text": s["text"].strip(),
+                         "avg_logprob": round(s["avg_logprob"], 3)})
+        for w in s.get("words", []):
+            # probability: whisper's confidence — low on crosstalk/bleed
+            # garbage, used by segment_tracks.py to drop or flag it
+            ws.append({"start": round(w["start"] + a, 3),
+                       "end": round(w["end"] + a, 3), "word": w["word"],
+                       "prob": round(w["probability"], 3)})
+    return segs, ws
+
+
+def fix_stretched(track: Path, ws: list) -> list:
+    """Re-transcribe the sentences around stretched words; splice if better."""
+    regions = []
+    for i, w in enumerate(ws):
+        if w["end"] - w["start"] <= STRETCH_SECS:
+            continue
+        lo = i
+        while lo > 0 and w["start"] - ws[lo - 1]["start"] < SPLICE_REACH:
+            if ws[lo - 1]["word"].strip().endswith(SENT):
+                break
+            lo -= 1
+        hi = i
+        while hi + 1 < len(ws) and ws[hi + 1]["end"] - w["end"] < SPLICE_REACH:
+            if ws[hi]["word"].strip().endswith(SENT) and hi > i:
+                break
+            hi += 1
+        if regions and lo <= regions[-1][1] + 1:
+            regions[-1][1] = max(regions[-1][1], hi)
+        else:
+            regions.append([lo, hi])
+    fixed = 0
+    for lo, hi in reversed(regions):
+        x = max(ws[lo]["start"] - 0.15, ws[lo - 1]["end"] if lo else 0.0)
+        y = min(ws[hi]["end"] + 0.15, ws[hi + 1]["start"] if hi + 1 < len(ws) else 1e9)
+        _, new = run_whisper(track, x, y)
+        new = [w for w in new if x - 0.05 <= w["start"] < y]
+        old_n = hi - lo + 1
+        old_stretch = sum(w["end"] - w["start"] > STRETCH_SECS for w in ws[lo: hi + 1])
+        new_stretch = sum(w["end"] - w["start"] > STRETCH_SECS for w in new)
+        if len(new) > old_n and new_stretch < old_stretch:
+            ws[lo: hi + 1] = new
+            fixed += 1
+            print(f"    skipped speech {x:7.1f}-{y:7.1f}: {old_n} -> {len(new)} words",
+                  flush=True)
+    if regions and fixed < len(regions):
+        print(f"    {len(regions) - fixed} stretched-word region(s) left as is",
+              flush=True)
+    return ws
+
+
+def transcribe_island(track: Path, a: float, b: float):
+    segs_all, ws_all, t = [], [], a
+    while t < b - 0.5:
+        segs, ws = run_whisper(track, t, b)
+        bad = first_poor(ws)
+        cut = None
+        if bad is not None:
+            for j in range(bad - 1, -1, -1):
+                if ws[j]["word"].strip().endswith(SENT):
+                    cut = j
+                    break
+            if cut is None or ws[cut]["end"] - t < MIN_ADVANCE:
+                cut = bad - 1  # no sentence end: restart at the collapse
+            if cut < 0 or ws[cut]["end"] - t < MIN_ADVANCE:
+                print(f"    {t:7.1f}-{b:7.1f}: punctuation collapses right "
+                      "away — STILL POOR, run repunctuate_words.py", flush=True)
+                cut = None
+        if cut is None:
+            segs_all += segs
+            ws_all += ws
+            break
+        nxt = (ws[cut]["end"] + ws[cut + 1]["start"]) / 2
+        segs_all += [s for s in segs if s["start"] < nxt]
+        ws_all += ws[: cut + 1]
+        print(f"    punctuation collapsed at {ws[bad]['start']:7.1f}: "
+              f"restart from sentence end {nxt:7.1f}", flush=True)
+        t = nxt
+    return segs_all, fix_stretched(track, ws_all)
+
+
 all_words, raw_segments = [], []
 for spk, fname in tracks_meta["speakers"].items():
     track = work / "tracks" / fname
@@ -94,31 +230,10 @@ for spk, fname in tracks_meta["speakers"].items():
     total = sum(b - a for a, b in islands)
     print(f"{spk} ({fname}): {len(islands)} islands, {total / 60:.1f} min",
           flush=True)
-    # detect the language once, on the longest island of the first track
-    if language is None and islands:
-        pass  # mlx_whisper detects per call; the first call below decides
     for a, b in sorted(islands, key=lambda ab: ab[0]):
-        clip = tmp / "track_island.wav"
-        subprocess.check_call([
-            "ffmpeg", "-y", "-v", "quiet", "-ss", f"{a:.3f}",
-            "-t", f"{b - a:.3f}", "-i", str(track),
-            "-ac", "1", "-ar", "16000", str(clip)])
-        r = mlx_whisper.transcribe(
-            str(clip), path_or_hf_repo=MODEL, word_timestamps=True,
-            **({"language": language} if language else {}))
-        language = language or r.get("language")
-        for s in r["segments"]:
-            if s["text"].strip():
-                raw_segments.append({
-                    "start": round(s["start"] + a, 3),
-                    "end": round(s["end"] + a, 3),
-                    "speaker": spk, "text": s["text"].strip()})
-            for w in s.get("words", []):
-                all_words.append({
-                    "start": round(w["start"] + a, 3),
-                    "end": round(w["end"] + a, 3),
-                    "word": w["word"], "speaker": spk})
-        clip.unlink(missing_ok=True)
+        segs, ws = transcribe_island(track, a, b)
+        raw_segments += [{**s, "speaker": spk} for s in segs]
+        all_words += [{**w, "speaker": spk} for w in ws]
     print(f"  {sum(1 for w in all_words if w['speaker'] == spk)} words",
           flush=True)
 

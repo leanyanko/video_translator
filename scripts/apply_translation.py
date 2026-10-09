@@ -62,10 +62,29 @@ for s in base["segments"]:
     seg = dict(prior.get(sid, s))
     if sid in translations:
         seg["text_ru"] = translations[sid]
-    if "text_ru" in seg:
+    # type:"orig" (nonverbal stem cuts from segment_tracks.py) carry no
+    # text to translate but must reach assemble.py all the same
+    if "text_ru" in seg or seg.get("type") == "orig":
         segments.append(seg)
 translated_ids = {str(s["id"]) for s in segments}
 segments = sorted(segments + extra, key=lambda s: s["start"])
+# timing budget: the Russian must FILL the original speech (≈13 chars per
+# second of end−start), not just fit under it — a squeezed line ends while
+# the speaker's mouth still moves. Short lines (<1.5 s) are exempt.
+CPS = 13.0
+for seg in segments:
+    sid = str(seg["id"])
+    if sid not in translations or seg.get("type") == "orig":
+        continue
+    dur = seg["end"] - seg["start"]
+    n = len(seg["text_ru"].replace("+", ""))
+    if dur >= 1.5 and n < 0.8 * CPS * dur:
+        print(f"SHORT  seg {sid}: {n} chars, budget {CPS * dur:.0f} "
+              f"({n / (CPS * dur):.0%}) — translate fuller, keep false starts")
+    elif n > 1.15 * CPS * dur + 10:
+        print(f"LONG   seg {sid}: {n} chars, budget {CPS * dur:.0f} "
+              f"({n / (CPS * dur):.0%})")
+
 ru_path.write_text(
     json.dumps(
         {"language": "ru", "speakers": base.get("speakers"), "segments": segments},
@@ -74,7 +93,7 @@ ru_path.write_text(
     )
 )
 
-missing = len(base_ids) - len(translated_ids)
+missing = len(base_ids - translated_ids)
 print(f"segments_ru.json: {len(segments)} segments"
       + (f", {missing} still untranslated" if missing else " (complete)"))
 export_work(work)
