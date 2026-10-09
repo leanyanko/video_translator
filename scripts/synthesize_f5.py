@@ -65,6 +65,7 @@ for i, s in enumerate(timeline):
 for s in segments:
     if s.get("overlap"):
         slots[s["id"]] = max(s["end"] - s["start"], 1.0)
+all_speech = list(segments)  # unfiltered: the manifest covers the whole dir
 segments = [s for s in segments if s["start"] >= min_secs]
 if limit_secs is not None:
     segments = [s for s in segments if s["start"] < limit_secs]
@@ -89,11 +90,11 @@ import re as _re
 from stress_rules import force_name_stress as _fns  # noqa: E402
 
 
+from manifest_bridge import norm_text as _norm_text  # noqa: E402
+
+
 def _norm(t: str) -> str:
-    # same tolerance as check_pipeline.py: marks, ёfication, respellings
-    t = _fns(t or "")
-    t = t.replace("+", "").replace("ё", "е").replace("Ё", "Е").lower()
-    return _re.sub(r"\s+", " ", _re.sub(r"[^\w ]+", " ", t)).strip()
+    return _norm_text(t, respell=_fns)
 
 
 # 1. accents.json must exist and match the CURRENT translation; a stale
@@ -131,9 +132,16 @@ def seg_hash(s) -> str:
         f"{s['speaker']}|{text}|{ref_sha(s['speaker'])}".encode()).hexdigest()
 
 
-if manifest_path.exists():
-    manifest = json.loads(manifest_path.read_text())
-else:
+from manifest_bridge import load_or_bridge  # noqa: E402
+
+# bridge over the UNFILTERED speech list: with --limit-secs/--min-secs
+# the filtered subset would produce a manifest that leaves every clip
+# outside the window unverified for the next full run
+manifest, _bridged = load_or_bridge(work, outdir, all_speech, accents,
+                                    ref_sha, refs_dir=REFS)
+if manifest is None:
+    # no manifest, no accents.prev.json record: pre-manifest clips of
+    # unknown provenance. Cautious default, unless explicitly adopted.
     manifest = {}
     existing = [s for s in segments
                 if (outdir / f"seg_{s['id']:04d}.wav").exists()]
@@ -161,6 +169,12 @@ else:
               "changed) and will be re-synthesized")
 todo.sort(key=lambda s: (s["speaker"], s["start"]))
 print(f"{len(todo)} of {len(segments)} segments to synthesize")
+if "--dry-run" in sys.argv:
+    # plan only: report what WOULD synthesize (bridge/manifest check),
+    # touch nothing, load no model
+    print("dry run: ids", sorted(s["id"] for s in todo)[:25],
+          "..." if len(todo) > 25 else "")
+    sys.exit(0)
 manifest_path.write_text(json.dumps(manifest, indent=1))
 if not todo:
     sys.exit(0)

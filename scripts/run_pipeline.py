@@ -193,9 +193,8 @@ def main() -> None:
         sys.path.insert(0, str(SCRIPTS))
         from stress_rules import force_name_stress
         acc = json.loads((work / "accents.json").read_text())
-        norm = lambda t: re.sub(  # noqa: E731
-            r"\s+", " ", re.sub(r"[^\w ]+", " ", force_name_stress(t or "")
-            .replace("+", "").replace("ё", "е").replace("Ё", "Е").lower())).strip()
+        from manifest_bridge import norm_text
+        norm = lambda t: norm_text(t, respell=force_name_stress)  # noqa: E731
         need_accents = any(
             s.get("type") != "orig" and s.get("text_ru")
             and norm(acc.get(str(s["id"]))) != norm(s["text_ru"])

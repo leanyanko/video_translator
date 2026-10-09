@@ -12,12 +12,24 @@ Usage:
   venv/bin/python scripts/redub.py <video.mp4> <segments_ru.json> \
       --refs work/<previous-id>/refs_f5 [--out work/<new-name>]
 
-Only segments whose text, speaker, or stress marks changed since the last
-redub are re-synthesized (a manifest tracks content hashes), so editing a
-few lines costs minutes, not hours. Produces video_ru.mp4 and
-video_ru_h264.mp4, and exports transcripts.
+Only segments whose text, speaker, stress marks or reference clip changed
+since the last synthesis are re-synthesized: synthesize_f5.py owns
+tts_f5/manifest.json (sha1 of speaker|accented text|ref hash per clip)
+and re-does every clip whose hash no longer matches, so editing a few
+lines costs minutes, not hours. This script never writes the manifest
+itself — the doctor (check_pipeline.py) and run_pipeline.py verify
+clips against the same manifest, so there must be exactly one scheme.
+
+Pre-manifest dirs migrate automatically and safely: accent_texts.py
+keeps the previous stress file as accents.prev.json (the record of what
+existing clips were SUNG from), and synthesize_f5.py bridges a missing
+or old-scheme manifest from it (scripts/manifest_bridge.py) — so a
+two-line edit re-synthesizes two clips, never the whole dir, and an
+edited line can never be passed off as fresh. --adopt-existing remains
+only for hand-copied clips with no record; --seed N is forwarded.
+
+Produces video_ru.mp4 and video_ru_h264.mp4, and exports transcripts.
 """
-import hashlib
 import json
 import shutil
 import subprocess
@@ -36,7 +48,9 @@ def run(title: str, cmd: list) -> None:
 
 
 def setup_workdir(args: list) -> Path:
-    if len(args) == 1 and Path(args[0]).is_dir():
+    if Path(args[0]).is_dir():
+        # in place (first positional is a work dir); any further args are
+        # flags forwarded to synthesize_f5.py
         work = Path(args[0])
         for req in ("video.mp4", "segments_ru.json", "refs_f5"):
             if not (work / req).exists():
@@ -82,32 +96,20 @@ def main() -> None:
                  "copy them from the previous run or rerun make_refs.py")
 
     run("stress marks", [PY_F5, SCRIPTS / "accent_texts.py", work])
-    accents = json.loads((work / "accents.json").read_text())
 
-    # invalidate clips whose content changed since the last redub
-    tts = work / "tts_f5"
-    tts.mkdir(exist_ok=True)
-    manifest_path = tts / "manifest.json"
-    # no manifest yet = first redub over this dir: existing clips are
-    # taken as the baseline (only missing ones get synthesized)
-    old = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
-    new, stale = {}, []
-    for s in segments:
-        sid = str(s["id"])
-        text = accents.get(sid, s["text_ru"])
-        h = hashlib.sha1(f"{s['speaker']}|{text}".encode()).hexdigest()
-        new[sid] = h
-        wav = tts / f"seg_{s['id']:04d}.wav"
-        if old is not None and wav.exists() and old.get(sid) != h:
-            wav.unlink()
-            stale.append(s["id"])
-    if stale:
-        print(f"=== {len(stale)} changed segments to re-synthesize: "
-              f"{stale[:12]}{'...' if len(stale) > 12 else ''}")
-
-    run("synthesize (missing/changed only)",
-        [PY_F5, SCRIPTS / "synthesize_f5.py", work])
-    manifest_path.write_text(json.dumps(new, indent=1))
+    # Invalidation is synthesize_f5.py's job: it compares every existing
+    # clip against tts_f5/manifest.json (speaker|accented text|ref hash)
+    # and re-synthesizes the ones that no longer match. Keeping a second
+    # hash scheme here used to overwrite that manifest after each redub,
+    # which made the next synthesize/doctor run see EVERY clip as stale.
+    synth_flags = []
+    for flag in ("--adopt-existing",):
+        if flag in args:
+            synth_flags.append(flag)
+    if "--seed" in args:
+        synth_flags += ["--seed", args[args.index("--seed") + 1]]
+    run("synthesize (missing/changed only, per tts_f5/manifest.json)",
+        [PY_F5, SCRIPTS / "synthesize_f5.py", work] + synth_flags)
 
     run("assemble", [PY, SCRIPTS / "assemble.py", work,
                      "--tts-dir", "tts_f5", "--out", "video_ru.mp4"])

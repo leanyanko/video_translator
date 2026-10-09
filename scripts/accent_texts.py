@@ -81,6 +81,12 @@ for s in segments:
     homographed = apply_homographs(plain, s.get("text"))
     accented = reapply_translator_marks(homographed, accented)
     out[str(s["id"])] = reapply_translator_marks(s["text_ru"], accented)
+# keep the record of what already-synthesized clips were SUNG from:
+# rotate the old file to accents.prev.json — but only when the output
+# actually changed (a no-op rerun must not bury the record under a
+# fresh mtime; see manifest_bridge.rotate_accents)
+from manifest_bridge import rotate_accents  # noqa: E402
+rotate_accents(work, out)
 (work / "accents.json").write_text(json.dumps(out, ensure_ascii=False, indent=1))
 print(f"{len(out)} segments stress-marked, {len(failed)} failed")
 for sid, err in failed:

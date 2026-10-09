@@ -43,16 +43,11 @@ def warn(stage, msg):
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stress_rules import force_name_stress  # noqa: E402
+from manifest_bridge import load_or_bridge, norm_text  # noqa: E402
 
 
 def norm(t):
-    # tolerate what accent_texts.py legitimately changes: stress marks,
-    # RUAccent's ёfication, and the name dictionary's respellings
-    t = force_name_stress(t or "")
-    t = t.replace("+", "").replace("ё", "е").replace("Ё", "Е").lower()
-    # words only: RUAccent also normalizes punctuation (drops …, swaps
-    # dashes) — only the words themselves may count as an edit
-    return re.sub(r"\s+", " ", re.sub(r"[^\w ]+", " ", t)).strip()
+    return norm_text(t, respell=force_name_stress)
 
 
 def jload(p):
@@ -74,7 +69,8 @@ mode = "multitrack" if tracks_meta else "mix"
 # ── words ───────────────────────────────────────────────────────────
 words_path = work / ("words_tracks.json" if mode == "multitrack" else "words.json")
 if words_path.exists():
-    words = jload(words_path)["words"]
+    _w = jload(words_path)
+    words = _w["words"] if isinstance(_w, dict) else _w  # old runs: bare list
     if not words:
         fail("words", f"{words_path.name} is empty")
 else:
@@ -188,9 +184,12 @@ if ru is not None and tts.exists():
     if missing:
         warn("tts", f"{len(missing)} clips not yet synthesized: {missing[:15]}")
     mpath = tts / "manifest.json"
-    if mpath.exists() and (work / "accents.json").exists():
-        manifest = jload(mpath)
+    if (work / "accents.json").exists() and (mpath.exists() or speech):
         acc = jload(work / "accents.json")
+        # the EFFECTIVE manifest: the same bridge synthesize_f5.py will
+        # use (read-only, silent) — otherwise an old-scheme or
+        # pre-manifest dir fails the doctor before synthesize ever gets
+        # the chance to migrate it
         ref_sha = {}
 
         def rsha(spk):
@@ -200,8 +199,18 @@ if ru is not None and tts.exists():
                                 if p.exists() else "noref")
             return ref_sha[spk]
 
+        manifest, _ = load_or_bridge(work, tts, speech, acc, rsha,
+                                     log=lambda *a: None, refs_dir=refs)
+        if manifest is None:
+            # no manifest and no trustworthy record: synthesize_f5.py's
+            # cautious default will re-do these clips — that is the
+            # remedy, so the doctor must not block the pipeline here
+            warn("tts", "clips have no manifest and no accents record — "
+                        "they will be re-synthesized on the next "
+                        "synthesize_f5.py run")
+            manifest = None
         stale = []
-        for s in speech:
+        for s in (speech if manifest is not None else ()):
             if not (tts / f"seg_{s['id']:04d}.wav").exists():
                 continue
             text = acc.get(str(s["id"]), s.get("text_ru", ""))
