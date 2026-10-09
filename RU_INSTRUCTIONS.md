@@ -34,6 +34,12 @@ conda create -y -n openvoice python=3.10
 /opt/miniconda3/envs/openvoice/bin/pip install --no-deps git+https://github.com/myshell-ai/OpenVoice.git
 ```
 
+Точные версии, с которыми пайплайн проверен, зафиксированы в корне репо:
+`requirements-venv.txt` / `requirements-f5.txt` (прямые зависимости) и
+`requirements-venv.lock.txt` / `requirements-f5.lock.txt` (полный слепок
+окружений, `pip install -r` воссоздаёт их один в один; `fish-speech` в
+venv стоит как editable-установка из клона, см. README).
+
 Известные особенности окружения:
 - `torchaudio` новых версий не дружит с ffmpeg 8 из brew — скрипты уже
   обходят это через `soundfile`, ничего делать не надо.

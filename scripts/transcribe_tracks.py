@@ -24,19 +24,20 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cli_args import opt
+
 import mlx_whisper
-import numpy as np
+
+from audio_utils import RMS_SILENCE, SCAN_FRAME as FRAME, merge_regions, scan_voiced_regions
 
 MODEL = "mlx-community/whisper-large-v3-turbo"
-FRAME = 0.25          # energy-scan frame, sec
-RMS_SILENCE = 0.0056  # ~-45 dBFS: below = the stem is silent here
 ISLAND_GAP = 8.0      # sec; voiced regions closer than this share an island
 PAD = 0.4             # sec of context kept around an island
 MIN_ISLAND = 0.5      # sec; shorter islands are breath/clicks, skipped
 
 work = Path(sys.argv[1])
-chunk_secs = float(sys.argv[sys.argv.index("--chunk-secs") + 1]) if "--chunk-secs" in sys.argv else 1200.0
-language = sys.argv[sys.argv.index("--language") + 1] if "--language" in sys.argv else None
+chunk_secs = opt("--chunk-secs", 1200.0, float)
+language = opt("--language", None)
 
 tracks_meta = json.loads((work / "tracks.json").read_text())
 tmp = work / "tmp"
@@ -45,45 +46,11 @@ tmp.mkdir(exist_ok=True)
 
 def voiced_islands(path: Path) -> list[tuple[float, float]]:
     """Streamed RMS scan → padded voiced islands, each ≤ chunk_secs."""
-    proc = subprocess.Popen([
-        "ffmpeg", "-v", "error", "-i", str(path),
-        "-f", "f32le", "-ac", "1", "-ar", "16000", "-",
-    ], stdout=subprocess.PIPE)
-    frame_n = int(FRAME * 16000)
-    regions, t, cur = [], 0.0, None
-    buf = b""
-    while True:
-        chunk = proc.stdout.read(frame_n * 4 * 64)
-        if not chunk:
-            break
-        buf += chunk
-        n = len(buf) // (frame_n * 4)
-        if not n:
-            continue
-        data = np.frombuffer(buf[: n * frame_n * 4], dtype=np.float32)
-        buf = buf[n * frame_n * 4:]
-        rms = np.sqrt((data.reshape(n, frame_n) ** 2).mean(axis=1))
-        for r in rms:
-            if r > RMS_SILENCE:
-                if cur is None:
-                    cur = t
-            elif cur is not None:
-                regions.append((cur, t))
-                cur = None
-            t += FRAME
-    if cur is not None:
-        regions.append((cur, t))
-    proc.wait()
-    regions = [(a, b) for a, b in regions if b - a >= MIN_ISLAND]
+    regions = [(a, b) for a, b in scan_voiced_regions(path, FRAME, RMS_SILENCE)
+               if b - a >= MIN_ISLAND]
     # merge into islands; a new island also starts when the current one
     # would exceed chunk_secs (the break then falls in a real pause)
-    islands = []
-    for a, b in regions:
-        if islands and a - islands[-1][1] <= ISLAND_GAP \
-                and b - islands[-1][0] <= chunk_secs:
-            islands[-1][1] = b
-        else:
-            islands.append([a, b])
+    islands = merge_regions(regions, ISLAND_GAP, chunk_secs)
     return [(max(0.0, a - PAD), b + PAD) for a, b in islands]
 
 

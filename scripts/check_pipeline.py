@@ -21,7 +21,6 @@ Exit code 0 = all pass; 1 = failures (listed). --strict also fails on
 warnings. Run it before synthesis and before assembly — run_pipeline.py
 does this automatically.
 """
-import hashlib
 import json
 import re
 import subprocess
@@ -43,7 +42,7 @@ def warn(stage, msg):
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stress_rules import force_name_stress  # noqa: E402
-from manifest_bridge import load_or_bridge, norm_text  # noqa: E402
+from manifest_bridge import load_or_bridge, norm_text, ref_hasher, seg_hash  # noqa: E402
 
 
 def norm(t):
@@ -150,7 +149,7 @@ if ru is not None:
 # ── refs ────────────────────────────────────────────────────────────
 refs = work / ("refs_f5" if (work / "refs_f5").exists() else "refs")
 if ru is not None:
-    import numpy as np
+    from audio_utils import audition, decode
     for spk in sorted({s["speaker"] for s in ru if s.get("type") != "orig"}):
         wav, txt = refs / f"{spk}.wav", refs / f"{spk}.txt"
         if not wav.exists() or not txt.exists():
@@ -158,19 +157,18 @@ if ru is not None:
             continue
         if not txt.read_text().strip():
             fail("refs", f"{spk}.txt is empty")
-        out = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", str(wav), "-f", "f32le",
-             "-ac", "1", "-ar", "16000", "-"], capture_output=True)
-        a = np.frombuffer(out.stdout, dtype=np.float32)
+        try:
+            a = decode(wav, 16000)
+        except subprocess.CalledProcessError:
+            fail("refs", f"{spk}.wav cannot be decoded")
+            continue
         dur = len(a) / 16000
         if not 4.0 <= dur <= 11.6:
             (fail if dur > 11.6 else warn)(
                 "refs", f"{spk}.wav is {dur:.1f}s (need 4-11.6 s)")
-        n = len(a) // 800
-        if n:
-            rms = np.sqrt((a[: n * 800].reshape(n, 800) ** 2).mean(axis=1))
-            voiced = rms > max(0.01, 0.1 * float(np.percentile(rms, 95)))
-            head = float(np.argmax(voiced)) * 0.05 if voiced.any() else dur
+        if len(a) >= 800:
+            # same rule make_refs.py auditioned the candidates with
+            head, _, _ = audition(a, 16000)
             if head > 0.3:
                 fail("refs", f"{spk}.wav: {head:.2f}s of silence before speech "
                              "— F5 will paint the same junk into every clip")
@@ -190,15 +188,7 @@ if ru is not None and tts.exists():
         # use (read-only, silent) — otherwise an old-scheme or
         # pre-manifest dir fails the doctor before synthesize ever gets
         # the chance to migrate it
-        ref_sha = {}
-
-        def rsha(spk):
-            if spk not in ref_sha:
-                p = refs / f"{spk}.wav"
-                ref_sha[spk] = (hashlib.sha1(p.read_bytes()).hexdigest()[:12]
-                                if p.exists() else "noref")
-            return ref_sha[spk]
-
+        rsha = ref_hasher(refs)
         manifest, _ = load_or_bridge(work, tts, speech, acc, rsha,
                                      log=lambda *a: None, refs_dir=refs)
         if manifest is None:
@@ -213,10 +203,7 @@ if ru is not None and tts.exists():
         for s in (speech if manifest is not None else ()):
             if not (tts / f"seg_{s['id']:04d}.wav").exists():
                 continue
-            text = acc.get(str(s["id"]), s.get("text_ru", ""))
-            h = hashlib.sha1(
-                f"{s['speaker']}|{text}|{rsha(s['speaker'])}".encode()).hexdigest()
-            if manifest.get(str(s["id"])) != h:
+            if manifest.get(str(s["id"])) != seg_hash(s, acc, rsha):
                 stale.append(s["id"])
         if stale:
             fail("tts", f"{len(stale)} clips STALE vs current text/accents/"

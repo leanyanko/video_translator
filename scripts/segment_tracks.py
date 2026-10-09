@@ -29,11 +29,13 @@ import sys
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from cli_args import opt
+
 import numpy as np
 
-TARGET_SECS = 12.0
-MAX_PAUSE = 1.0
-SENT_END = (".", "!", "?", "…")
+from audio_utils import decode
+from segmenting import (GAP_BREAK, MAX_PAUSE, SENT_END, TARGET_SECS,
+                        build_sentences, merge_short, split_long, words_text)
 
 # cross-track housekeeping (none of this exists in the mix flow):
 ECHO_DT = 0.7        # sec; same text within this start offset = mic bleed
@@ -49,8 +51,8 @@ HALLUCINATIONS = {"thank you.", "thanks for watching.", "thank you for watching.
 QUIET_FRACTION = 0.25  # of the speaker's median segment RMS
 
 work = Path(sys.argv[1])
-min_overlap = float(sys.argv[sys.argv.index("--min-overlap") + 1]) if "--min-overlap" in sys.argv else 0.3
-out_name = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else "segments.json"
+min_overlap = opt("--min-overlap", 0.3, float)
+out_name = opt("--out", "segments.json")
 
 data = json.loads((work / "words_tracks.json").read_text())
 words, language = data["words"], data.get("language")
@@ -67,11 +69,7 @@ BLEED_FLOOR = 0.015     # absolute floor for very quiet speakers
 kept = []
 for spk in sorted({w["speaker"] for w in words}):
     path = work / "tracks" / tracks_meta["speakers"][spk]
-    proc = subprocess.run([
-        "ffmpeg", "-v", "error", "-i", str(path),
-        "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
-        capture_output=True, check=True)
-    audio = np.frombuffer(proc.stdout, dtype=np.float32)
+    audio = decode(path, 16000)
     ws = [w for w in words if w["speaker"] == spk]
     rms = []
     for w in ws:
@@ -129,7 +127,6 @@ n_echo_words = len(drop)
 words = [w for w in words if id(w) not in drop]
 print(f"cross-track echo: dropped {n_echo_words} words heard louder on another stem")
 
-GAP_BREAK = 2.5      # sec; a silence this long always ends the sentence
 MAX_SENT_SECS = 25.0  # longer sentences are split (whisper sometimes loses
                       # punctuation, and very long lines are hard to dub):
                       # at the largest pause after a comma (a clause
@@ -137,68 +134,40 @@ MAX_SENT_SECS = 25.0  # longer sentences are split (whisper sometimes loses
                       # pause only when the sentence has no commas
 
 
-def split_long(ws: list) -> list[list]:
-    if ws[-1]["end"] - ws[0]["start"] <= MAX_SENT_SECS or len(ws) < 2:
-        return [ws]
-    gaps = [(ws[i + 1]["start"] - ws[i]["end"], i) for i in range(len(ws) - 1)]
-    clause = [g for g in gaps if ws[g[1]]["word"].strip().endswith((",", ";", ":", "—"))]
-    _, cut = max(clause or gaps)
-    return split_long(ws[: cut + 1]) + split_long(ws[cut + 1:])
-
-
-# per-speaker sentence building (same rules as segment_sentences.py,
-# plus the run-on guards above)
+# per-speaker sentence building (segmenting.py: the same rules as
+# segment_sentences.py, plus the run-on guards GAP_BREAK / split_long)
 segments = []
 dropped_orphan = 0
 for spk in sorted({w["speaker"] for w in words}):
     stream = [w for w in words if w["speaker"] == spk]
-    sentences, cur = [], []
-    for w in stream:
-        if cur and w["start"] - cur[-1]["end"] > GAP_BREAK:
-            sentences.append(cur)
-            cur = []
-        cur.append(w)
-        if w["word"].strip().endswith(SENT_END):
-            sentences.append(cur)
-            cur = []
-    if cur:
-        sentences.append(cur)
-    sentences = [p for ws in sentences for p in split_long(ws)]
+    sentences = build_sentences(stream, gap_break=GAP_BREAK)
+    sentences = [p for ws in sentences for p in split_long(ws, MAX_SENT_SECS)]
     # stray bleed words split off by the gap rule come out as tiny
     # fragments with no sentence-final punctuation — not translatable
     kept_sents = []
     for ws in sentences:
-        text = "".join(w["word"] for w in ws).strip()
+        text = words_text(ws)
         if (len(ws) <= 3 and not text.rstrip().endswith(SENT_END)
                 and not NONVERBAL.match(text)):
             dropped_orphan += 1
             continue
         kept_sents.append(ws)
     sentences = kept_sents
-    merged = []
+    items = []
     for ws in sentences:
-        text = "".join(w["word"] for w in ws).strip()
+        text = words_text(ws)
         if not text:
             continue
-        s = {"start": round(ws[0]["start"], 3), "end": round(ws[-1]["end"], 3),
-             "speaker": spk, "text": text}
-        if (merged and s["start"] - merged[-1]["end"] <= MAX_PAUSE
-                and s["end"] - merged[-1]["start"] <= TARGET_SECS):
-            merged[-1]["end"] = s["end"]
-            merged[-1]["text"] += " " + s["text"]
-        else:
-            merged.append(s)
-    segments.extend(merged)
+        items.append({"start": round(ws[0]["start"], 3),
+                      "end": round(ws[-1]["end"], 3),
+                      "speaker": spk, "text": text})
+    segments.extend(merge_short(items, TARGET_SECS, MAX_PAUSE))
 
 # ── cross-track housekeeping ────────────────────────────────────────
 def track_rms(spk: str, segs: list) -> None:
     """Attach each segment's RMS measured on its OWN speaker's stem."""
     path = work / "tracks" / tracks_meta["speakers"][spk]
-    proc = subprocess.run([
-        "ffmpeg", "-v", "error", "-i", str(path),
-        "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
-        capture_output=True, check=True)
-    audio = np.frombuffer(proc.stdout, dtype=np.float32)
+    audio = decode(path, 16000)
     for s in segs:
         span = audio[int(s["start"] * 16000): int(s["end"] * 16000)]
         s["_rms"] = float(np.sqrt((span ** 2).mean())) if len(span) else 0.0

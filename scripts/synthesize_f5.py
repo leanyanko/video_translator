@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+from cli_args import flag, opt
+
 # torchaudio 2.11+ delegates load/save to torchcodec, which fails to link
 # against Homebrew ffmpeg 8 — route both through soundfile instead.
 import soundfile as _sf
@@ -41,12 +43,11 @@ CKPT = ROOT / "checkpoints/f5-ru/F5TTS_v1_Base_v2/model_last_inference.safetenso
 VOCAB = ROOT / "checkpoints/f5-ru/F5TTS_v1_Base/vocab.txt"
 
 work = Path(sys.argv[1])
-min_secs = float(sys.argv[sys.argv.index("--min-secs") + 1]) if "--min-secs" in sys.argv else 0.0
-limit_secs = float(sys.argv[sys.argv.index("--limit-secs") + 1]) if "--limit-secs" in sys.argv else None
-only_ids = None
-if "--only" in sys.argv:  # comma-separated ids; existing files are re-rolled
-    only_ids = {int(x) for x in sys.argv[sys.argv.index("--only") + 1].split(",")}
-SEED = int(sys.argv[sys.argv.index("--seed") + 1]) if "--seed" in sys.argv else 42
+min_secs = opt("--min-secs", 0.0, float)
+limit_secs = opt("--limit-secs", None, float)
+# --only: comma-separated ids; existing files are re-rolled
+only_ids = opt("--only", None, lambda v: {int(x) for x in v.split(",")})
+SEED = opt("--seed", 42, int)
 
 # F5 refs must be <=~11.5s with exactly matching text (F5 clips ref audio
 # at 12s internally; longer refs desync text/audio and garble output)
@@ -83,14 +84,9 @@ accents = json.loads(accents_path.read_text()) if accents_path.exists() else {}
 # whose translation was edited after accent_texts.py sang the OLD text
 # with the OLD stresses, and clips carried over from earlier runs were
 # never invalidated.
-import hashlib
-import re as _re
-
-
 from stress_rules import force_name_stress as _fns  # noqa: E402
-
-
-from manifest_bridge import norm_text as _norm_text  # noqa: E402
+from manifest_bridge import (  # noqa: E402
+    load_or_bridge, norm_text as _norm_text, ref_hasher, seg_hash as _seg_hash)
 
 
 def _norm(t: str) -> str:
@@ -102,7 +98,7 @@ def _norm(t: str) -> str:
 bad = [s["id"] for s in segments
        if str(s["id"]) not in accents
        or _norm(accents[str(s["id"])]) != _norm(s.get("text_ru", ""))]
-if bad and "--allow-plain" not in sys.argv:
+if bad and not flag("--allow-plain"):
     print(f"ERROR: {len(bad)} segment(s) have missing or STALE stress marks "
           f"(accents.json does not match segments_ru.json): {bad[:20]}"
           f"{'...' if len(bad) > 20 else ''}\n"
@@ -116,23 +112,12 @@ if bad and "--allow-plain" not in sys.argv:
 #    No manifest yet (pre-manifest run) = existing clips are adopted as
 #    the baseline, same semantics as redub.py.
 manifest_path = outdir / "manifest.json"
-_ref_sha = {}
-
-
-def ref_sha(spk: str) -> str:
-    if spk not in _ref_sha:
-        p = REFS / f"{spk}.wav"
-        _ref_sha[spk] = hashlib.sha1(p.read_bytes()).hexdigest()[:12] if p.exists() else "noref"
-    return _ref_sha[spk]
+ref_sha = ref_hasher(REFS)
 
 
 def seg_hash(s) -> str:
-    text = accents.get(str(s["id"]), s.get("text_ru", ""))
-    return hashlib.sha1(
-        f"{s['speaker']}|{text}|{ref_sha(s['speaker'])}".encode()).hexdigest()
+    return _seg_hash(s, accents, ref_sha)
 
-
-from manifest_bridge import load_or_bridge  # noqa: E402
 
 # bridge over the UNFILTERED speech list: with --limit-secs/--min-secs
 # the filtered subset would produce a manifest that leaves every clip
@@ -145,7 +130,7 @@ if manifest is None:
     manifest = {}
     existing = [s for s in segments
                 if (outdir / f"seg_{s['id']:04d}.wav").exists()]
-    if existing and "--adopt-existing" in sys.argv:
+    if existing and flag("--adopt-existing"):
         # explicit opt-in for pre-manifest dirs KNOWN to match the
         # current text/accents/refs (e.g. a run finished minutes ago)
         manifest = {str(s["id"]): seg_hash(s) for s in existing}
@@ -169,7 +154,7 @@ else:
               "changed) and will be re-synthesized")
 todo.sort(key=lambda s: (s["speaker"], s["start"]))
 print(f"{len(todo)} of {len(segments)} segments to synthesize")
-if "--dry-run" in sys.argv:
+if flag("--dry-run"):
     # plan only: report what WOULD synthesize (bridge/manifest check),
     # touch nothing, load no model
     print("dry run: ids", sorted(s["id"] for s in todo)[:25],

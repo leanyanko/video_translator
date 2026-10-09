@@ -23,6 +23,10 @@ work/
 *.mp3
 *.mp4
 
+# Review-progress tracker page + item snapshot (a private Claude
+# artifact; the live copy is the URL in tracker/README.md)
+tracker/
+
 # ── Python ──────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

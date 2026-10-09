@@ -19,22 +19,22 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cli_args import flag, opt
+
 MIN_SECS, MAX_SECS = 6.0, 20.0
 MAX_GAP = 0.5
 
 work = Path(sys.argv[1])
-if "--max-secs" in sys.argv:
-    MAX_SECS = float(sys.argv[sys.argv.index("--max-secs") + 1])
+if flag("--max-secs"):
+    MAX_SECS = opt("--max-secs", cast=float)
     MIN_SECS = min(MIN_SECS, MAX_SECS / 2)
-refs_name = (
-    sys.argv[sys.argv.index("--outdir") + 1] if "--outdir" in sys.argv else "refs"
-)
+refs_name = opt("--outdir", "refs")
 data = json.loads((work / "segments.json").read_text())
 refs_dir = work / refs_name
 refs_dir.mkdir(exist_ok=True)
 
 track_of = {}
-if "--tracks" in sys.argv:
+if flag("--tracks"):
     tracks_meta = json.loads((work / "tracks.json").read_text())
     track_of = {spk: work / "tracks" / f
                 for spk, f in tracks_meta["speakers"].items()}
@@ -46,35 +46,24 @@ if "--tracks" in sys.argv:
 # every clip got a LEAD artifact and the dub felt delayed). Candidates
 # are therefore AUDITIONED, longest first, and the first one that passes
 # the audio checks wins.
-import numpy as np
+from audio_utils import audition as _audition, decode  # noqa: E402
 
 MAX_HEAD_SIL = 0.3   # sec of silence allowed before the first word
 MAX_TAIL_SIL = 0.6   # sec allowed after the last word
 MIN_VOICED = 0.55    # min share of voiced frames inside the clip
-SIL_RMS = 0.01       # ~-40 dBFS on 50 ms frames
 
 
 def audition(source, start, end):
-    """(head_sil, tail_sil, voiced_share) of the span, by 50 ms RMS."""
-    out = subprocess.run([
-        "ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
-        "-i", str(source), "-f", "f32le", "-ac", "1", "-ar", "16000", "-",
-    ], capture_output=True, check=True)
-    a = np.frombuffer(out.stdout, dtype=np.float32)
-    n = len(a) // 800
-    if n == 0:
+    """(head_sil, tail_sil, voiced_share) of the span — the rule lives in
+    audio_utils.audition; check_pipeline.py re-checks the chosen ref
+    with the very same function."""
+    a = decode(source, 16000, start=start, end=end)
+    if len(a) < 800:  # nothing decodable: treat as all silence
         return end - start, end - start, 0.0
-    rms = np.sqrt((a[: n * 800].reshape(n, 800) ** 2).mean(axis=1))
-    # silence threshold relative to THIS clip's speech level: quiet mic
-    # noise above an absolute floor is still junk compared to the voice
-    voiced = rms > max(SIL_RMS, 0.1 * float(np.percentile(rms, 95)))
-    if not voiced.any():
-        return end - start, end - start, 0.0
-    first, last = int(np.argmax(voiced)), n - 1 - int(np.argmax(voiced[::-1]))
-    return first * 0.05, (n - 1 - last) * 0.05, float(voiced.mean())
+    return _audition(a, 16000)
 
 
-only_spk = sys.argv[sys.argv.index("--speaker") + 1] if "--speaker" in sys.argv else None
+only_spk = opt("--speaker", None)
 
 for spk in data["speakers"]:
     if only_spk and spk != only_spk:

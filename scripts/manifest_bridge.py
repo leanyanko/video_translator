@@ -75,6 +75,29 @@ def old_hash(speaker: str, text: str) -> str:
     return hashlib.sha1(f"{speaker}|{text}".encode()).hexdigest()
 
 
+def ref_hasher(refs_dir: Path):
+    """spk -> 12-hex sha1 of refs_dir/<spk>.wav ("noref" if absent), cached.
+    The same function object must be used for one manifest comparison
+    (synthesize_f5.py and check_pipeline.py each build one)."""
+    cache = {}
+
+    def ref_sha(spk: str) -> str:
+        if spk not in cache:
+            p = Path(refs_dir) / f"{spk}.wav"
+            cache[spk] = (hashlib.sha1(p.read_bytes()).hexdigest()[:12]
+                          if p.exists() else "noref")
+        return cache[spk]
+
+    return ref_sha
+
+
+def seg_hash(seg: dict, accents: dict, ref_sha) -> str:
+    """Manifest entry for a segment: speaker | accented text (falls back
+    to text_ru when the accent stage skipped it) | ref hash."""
+    text = accents.get(str(seg["id"]), seg.get("text_ru", ""))
+    return new_hash(seg["speaker"], text, ref_sha(seg["speaker"]))
+
+
 def load_or_bridge(work: Path, outdir: Path, segments: list, accents: dict,
                    ref_sha, log=print, refs_dir: Path | None = None):
     """Return (manifest dict, bridged_count) for synthesize_f5.py.

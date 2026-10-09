@@ -31,13 +31,14 @@ import json
 import sys
 from pathlib import Path
 
-SENT_END = (".", "!", "?", "…")
-GAP_BREAK = 2.5  # same as the segmenters: a longer silence ends a run anyway
+from cli_args import opt
+
+from segmenting import GAP_BREAK, SENT_END  # same rules as the segmenters
 
 work = Path(sys.argv[1])
 mode, arg = sys.argv[2], Path(sys.argv[3])
-words_name = sys.argv[sys.argv.index("--words") + 1] if "--words" in sys.argv else "words_tracks.json"
-min_secs = float(sys.argv[sys.argv.index("--min-secs") + 1]) if "--min-secs" in sys.argv else 18.0
+words_name = opt("--words", "words_tracks.json")
+min_secs = opt("--min-secs", 18.0, float)
 
 words_path = work / words_name
 data = json.loads(words_path.read_text())

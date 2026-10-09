@@ -14,14 +14,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cli_args import flag, opt
+
 from pydub import AudioSegment
+
+from audio_utils import probe_duration
 
 MAX_TEMPO = 1.35  # max speed-up before we allow overflow instead
 SR = 44100
 
 work = Path(sys.argv[1])
-tts_name = sys.argv[sys.argv.index("--tts-dir") + 1] if "--tts-dir" in sys.argv else "tts"
-out_name = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else "video_ru.mp4"
+tts_name = opt("--tts-dir", "tts")
+out_name = opt("--out", "video_ru.mp4")
 segments = json.loads((work / "segments_ru.json").read_text())["segments"]
 # "echo": a listener repeating the speaker's words as he says them
 # (scripts/repeat_audit.py --mark-echo) — dubbed, it would be heard twice
@@ -34,14 +38,6 @@ segments = [s for s in segments if not s.get("overlap")]
 tts_dir = work / tts_name
 tmp = work / "tmp"
 tmp.mkdir(exist_ok=True)
-
-
-def probe_duration(path: Path) -> float:
-    out = subprocess.check_output([
-        "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-        "-of", "csv=p=0", str(path),
-    ], text=True)
-    return float(out.strip())
 
 
 video_dur = probe_duration(work / "video.mp4")
@@ -147,7 +143,7 @@ for i, seg in enumerate(segments):
 # Off by default: whisper's segment edges leak English word tails and
 # breaths into the gaps, which sounds worse than silence. (A future
 # laughter-only variant would need a laughter detector to pick regions.)
-if "--fill-gaps" in sys.argv:
+if flag("--fill-gaps"):
     MIN_GAP = 0.4  # sec; ignore hairline gaps
     FADE_MS = 120
     original = AudioSegment.from_wav(work / "audio.wav").set_frame_rate(SR).set_channels(1)
@@ -196,10 +192,9 @@ if overlap_segments:
 # optional full-length music/SFX bed (multitrack mode): the editor's
 # "Music and SFX" stem is timeline-aligned and already mixed at
 # speech-relative levels, so it is overlaid as-is; --music-gain adjusts by ear
-if "--music" in sys.argv:
-    music_path = Path(sys.argv[sys.argv.index("--music") + 1])
-    music_gain = (float(sys.argv[sys.argv.index("--music-gain") + 1])
-                  if "--music-gain" in sys.argv else 0.0)
+if flag("--music"):
+    music_path = Path(opt("--music"))
+    music_gain = opt("--music-gain", 0.0, float)
     bed = AudioSegment.from_file(music_path).set_frame_rate(SR).set_channels(2)
     if music_gain:
         bed = bed + music_gain

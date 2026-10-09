@@ -1,0 +1,14 @@
+# Direct dependencies of venv/ at the versions in use (2026-10-09).
+# Exact full environment: requirements-venv.lock.txt. Install: venv/bin/pip install -r requirements-venv.txt
+yt-dlp==2026.8.19
+mlx-whisper==0.4.3
+pyannote-audio==4.0.7
+pydub==0.25.1
+soundfile==0.14.0
+numpy==2.5.3
+huggingface_hub==0.36.2
+panns-inference==0.1.1
+speechbrain==1.0.0
+librosa==0.11.0
+requests==2.34.2
+ormsgpack==1.12.2

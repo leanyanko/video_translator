@@ -20,15 +20,16 @@ import json
 import sys
 from pathlib import Path
 
+from cli_args import opt
+
 import mlx_whisper
 
+from segmenting import MAX_PAUSE, SENT_END, TARGET_SECS, build_sentences, merge_short
+
 MODEL = "mlx-community/whisper-large-v3-turbo"
-TARGET_SECS = 12.0   # merge short same-speaker sentences up to this
-MAX_PAUSE = 1.0      # never merge across a pause longer than this
-SENT_END = (".", "!", "?", "…")
 
 work = Path(sys.argv[1])
-limit_secs = float(sys.argv[sys.argv.index("--limit-secs") + 1]) if "--limit-secs" in sys.argv else None
+limit_secs = opt("--limit-secs", None, float)
 
 turns = json.loads((work / "diarization.json").read_text())
 if limit_secs:
@@ -83,15 +84,7 @@ for w in words:
     w["speaker"] = speaker_at(w["start"], w["end"])
 
 # build sentences: a sentence ends at sentence-final punctuation
-sentences = []
-cur = []
-for w in words:
-    cur.append(w)
-    if w["word"].strip().endswith(SENT_END):
-        sentences.append(cur)
-        cur = []
-if cur:
-    sentences.append(cur)
+sentences = build_sentences(words)
 
 
 def majority_speaker(ws) -> str:
@@ -114,18 +107,7 @@ sent_items = [
 ]
 
 # merge short same-speaker sentences (never across long pauses)
-merged = []
-for s in sent_items:
-    if (
-        merged
-        and s["speaker"] == merged[-1]["speaker"]
-        and s["start"] - merged[-1]["end"] <= MAX_PAUSE
-        and s["end"] - merged[-1]["start"] <= TARGET_SECS
-    ):
-        merged[-1]["end"] = s["end"]
-        merged[-1]["text"] += " " + s["text"]
-    else:
-        merged.append(dict(s))
+merged = merge_short(sent_items, TARGET_SECS, MAX_PAUSE)
 
 segments = [{"id": i, **s} for i, s in enumerate(merged)]
 speakers = sorted({s["speaker"] for s in segments})

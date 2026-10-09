@@ -39,29 +39,26 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cli_args import opt
+
 import numpy as np
 import torch
+
+from audio_utils import RMS_SILENCE, decode, frame_rms  # noqa: E402
 
 SR = 16000
 FRAME = 0.25          # sec, labelling resolution
 WIN, HOP = 1.5, 0.5   # sec, embedding window / hop
-RMS_SILENCE = 0.0056  # same threshold as the rest of the multitrack tools
 PROFILE_TOP = 0.3     # loudest share of own windows used for the first profile
 FADE = 0.02           # sec
 GROW_FRAMES = 3       # how far (×FRAME) a muted stretch may grow into its edges
 OWNER_SURE = 0.15     # frames scoring above this are clearly the owner: never grown into
 
 work = Path(sys.argv[1])
-margin = float(sys.argv[sys.argv.index("--margin") + 1]) if "--margin" in sys.argv else 0.05
-report = sys.argv[sys.argv.index("--report") + 1] if "--report" in sys.argv else None
+margin = opt("--margin", 0.05, float)
+report = opt("--report", None)
 meta = json.loads((work / "tracks.json").read_text())
 speakers = meta["speakers"]
-
-
-def decode(path: Path, sr: int) -> np.ndarray:
-    out = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le",
-                          "-ac", "1", "-ar", str(sr), "-"], capture_output=True, check=True)
-    return np.frombuffer(out.stdout, dtype=np.float32)
 
 
 from pyannote.audio import Model  # noqa: E402  (slow import)
@@ -83,7 +80,7 @@ stems = {}
 for spk, fname in speakers.items():
     audio = decode(work / "tracks" / fname, SR)
     fn = int(FRAME * SR)
-    rms = np.sqrt((audio[: len(audio) // fn * fn].reshape(-1, fn) ** 2).mean(1))
+    rms = frame_rms(audio, fn)
     voiced = rms > RMS_SILENCE
     # windows centred on voiced frames, every HOP
     step = int(HOP / FRAME)

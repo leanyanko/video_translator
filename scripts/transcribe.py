@@ -20,20 +20,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cli_args import opt
+
 import mlx_whisper
+
+from audio_utils import probe_duration
 
 MODEL = "mlx-community/whisper-large-v3-turbo"
 SEARCH = 60.0  # seconds around the nominal boundary to look for a pause
 
 work = Path(sys.argv[1])
-limit_secs = float(sys.argv[sys.argv.index("--limit-secs") + 1]) if "--limit-secs" in sys.argv else None
-chunk_secs = float(sys.argv[sys.argv.index("--chunk-secs") + 1]) if "--chunk-secs" in sys.argv else 1200.0
+limit_secs = opt("--limit-secs", None, float)
+chunk_secs = opt("--chunk-secs", 1200.0, float)
 
 audio = work / "audio.wav"
-probe = subprocess.check_output(
-    ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-     "-of", "csv=p=0", str(audio)], text=True)
-total = float(probe.strip())
+total = probe_duration(audio)
 if limit_secs:
     total = min(total, limit_secs)
 

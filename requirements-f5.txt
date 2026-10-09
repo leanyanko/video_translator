@@ -1,0 +1,11 @@
+# Direct dependencies of venv-f5/ at the versions in use (2026-10-09).
+# Exact full environment: requirements-f5.lock.txt. Install: venv-f5/bin/pip install -r requirements-f5.txt
+f5-tts==1.1.22
+ruaccent==1.5.8.3
+soundfile==0.14.0
+numpy==2.5.3
+torch==2.14.0
+torchaudio==2.11.0
+onnxruntime==1.30.0
+huggingface_hub==1.31.0
+librosa==1.0.0
