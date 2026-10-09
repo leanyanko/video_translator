@@ -218,8 +218,12 @@ def main() -> None:
         [PY, SCRIPTS / "qc_tts.py", work])
 
     if multitrack and not (work / "laughs").is_dir():
-        run("restore non-speech sounds off the raw stems",
-            [PY, SCRIPTS / "harvest_laughs.py", work])
+        restore = (sys.argv[sys.argv.index("--restore-sounds") + 1]
+                   if "--restore-sounds" in sys.argv else "laughs")
+        if restore != "none":
+            run(f"restore non-speech sounds off the raw stems ({restore})",
+                [PY, SCRIPTS / "harvest_laughs.py", work,
+                 "--restore-sounds", restore])
 
     doctor(work, "before assembly")
 

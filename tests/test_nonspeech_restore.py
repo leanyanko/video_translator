@@ -47,3 +47,25 @@ class BleedRatioTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LaughSignatureTest(unittest.TestCase):
+    def test_pulsed_envelope_is_a_laugh(self):
+        from harvest_laughs import envelope_bursts, is_laugh
+        env = [0.01, 0.06, 0.01, 0.055, 0.012, 0.05, 0.01]  # ha-ha-ha
+        self.assertGreaterEqual(envelope_bursts(env), 2)
+        self.assertTrue(is_laugh(2.3, envelope_bursts(env), 0.0))
+
+    def test_flat_hum_is_not_a_laugh(self):
+        from harvest_laughs import envelope_bursts, is_laugh
+        env = [0.02, 0.05, 0.055, 0.05, 0.02]  # one flat "mm"
+        self.assertEqual(envelope_bursts(env), 1)
+        self.assertFalse(is_laugh(0.5, envelope_bursts(env), 0.0))
+
+    def test_breathy_laugh_saved_by_low_panns_vote(self):
+        from harvest_laughs import is_laugh
+        self.assertTrue(is_laugh(0.6, 1, 0.06))  # acoustic no, panns yes
+
+    def test_short_grunt_fails_both_votes(self):
+        from harvest_laughs import is_laugh
+        self.assertFalse(is_laugh(0.5, 1, 0.01))

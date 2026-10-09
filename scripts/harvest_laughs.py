@@ -83,9 +83,52 @@ def bleed_dropped(own_rms: float, others_max: float,
     return others_max >= ratio * max(own_rms, 1e-6)
 
 
+# ── laugh discrimination (mode --restore-sounds laughs) ───────────────
+# Laughter pulses: "ha-ha-ha" is 2+ energy bursts over >=0.7 s, while a
+# hum/sigh/grunt is one flat burst. PANNs alone missed a breathy laugh
+# at score ~0.05, so the verdict is an OR of two independent voices:
+# the acoustic signature and a LOW-threshold PANNs label.
+LAUGH_MIN_SECS = 0.7
+LAUGH_MIN_BURSTS = 2
+LAUGH_PANNS_THR = 0.05
+
+
+def envelope_bursts(env) -> int:
+    """Count energy bursts in an RMS envelope (frames): local maxima
+    above half the peak, separated by a dip below 60 % of the smaller
+    neighbour peak."""
+    env = [float(x) for x in env]
+    if not env:
+        return 0
+    peak = max(env)
+    if peak <= 0:
+        return 0
+    bursts, in_burst = 0, False
+    hi, lo = 0.5 * peak, 0.3 * peak
+    for x in env:
+        if not in_burst and x >= hi:
+            bursts += 1
+            in_burst = True
+        elif in_burst and x <= lo:
+            in_burst = False
+    return bursts
+
+
+def is_laugh(dur_secs: float, bursts: int, panns_laugh_score: float) -> bool:
+    acoustic = dur_secs >= LAUGH_MIN_SECS and bursts >= LAUGH_MIN_BURSTS
+    labeled = panns_laugh_score >= LAUGH_PANNS_THR
+    return acoustic or labeled
+
+
 def main() -> None:
     work = Path(sys.argv[1])
     dry_run = flag("--dry-run")
+    mode = opt("--restore-sounds", "laughs")
+    if mode not in ("laughs", "all", "none"):
+        sys.exit("--restore-sounds must be laughs|all|none")
+    if mode == "none":
+        print("non-speech restore disabled (--restore-sounds none)")
+        return
     debug = flag("--debug")
     label_on = not flag("--no-label")
     label_thr = opt("--threshold", 0.1, float)
@@ -149,7 +192,9 @@ def main() -> None:
                           "start": round(max(0.0, a - PAD), 3),
                           "end": round(b + PAD, 3), "label": "nonspeech"})
 
-    if label_on and found:
+    LAUGH_FAMILY = ("Laughter", "Giggle", "Chuckle, chortle", "Snicker",
+                    "Belly laugh")
+    if (label_on or mode == "laughs") and found:
         from panns_inference import AudioTagging  # lazy: labels only
         import librosa
         tagger = AudioTagging(checkpoint_path=None, device="cpu")
@@ -165,6 +210,28 @@ def main() -> None:
             if float(scores[best]) >= label_thr:
                 f["label"] = names[best]
                 f["score"] = round(float(scores[best]), 3)
+            f["_panns_laugh"] = max(float(scores[i]) for i in want
+                                    if names[i] in LAUGH_FAMILY)
+
+    if mode == "laughs":
+        kept = []
+        for f in found:
+            a, b = f["start"], f["end"]
+            env = rms[f["speaker"]][int(a / SCAN_FRAME): int(b / SCAN_FRAME) + 1]
+            bursts = envelope_bursts(env)
+            panns = f.pop("_panns_laugh", 0.0)
+            keep = is_laugh(b - a, bursts, panns)
+            print(f"  {'LAUGH' if keep else 'skip '} {f['speaker'][-2:]} "
+                  f"{a:7.1f}-{b:7.1f} dur={b-a:.1f}s bursts={bursts} "
+                  f"panns={panns:.2f} {f['label']}", flush=True)
+            if keep:
+                kept.append(f)
+        print(f"mode=laughs: kept {len(kept)} of {len(found)} sounds "
+              "(hums/sighs/grunts between words are NOT pasted)")
+        found = kept
+    else:
+        for f in found:
+            f.pop("_panns_laugh", None)
 
     if dry_run:
         print(f"DRY RUN: {len(found)} non-speech sounds found, nothing written")
