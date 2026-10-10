@@ -49,6 +49,30 @@ def norm_text(t, respell=None):
     return re.sub(r"[^\w]+", "", t)
 
 
+def voiced(seg: dict) -> bool:
+    """Is this segment one we synthesize? Pasted originals (type:"orig")
+    and echo lines (repeat_audit --mark-echo; assemble drops them) are
+    not voiced — synthesizing them is pure waste (TODO #9)."""
+    return seg.get("type") != "orig" and not seg.get("echo")
+
+
+def stale_ids(segments: list, accents: dict, respell=None) -> list:
+    """ids whose accents.json entry is missing or no longer matches the
+    segment's CURRENT text_ru — i.e. accent_texts.py was not re-run
+    after a translation edit (the e1v5 stale-audio class). The single
+    home of this check: synthesize_f5's gate, the doctor and
+    run_pipeline's need-accents test all call it. Scope it to the set
+    actually being synthesized (--only) so an unrelated stale line
+    cannot hold a surgical re-roll hostage (TODO #3)."""
+    bad = []
+    for s in segments:
+        a = accents.get(str(s["id"]))
+        if a is None or norm_text(a, respell) != norm_text(
+                s.get("text_ru", ""), respell):
+            bad.append(s["id"])
+    return bad
+
+
 def rotate_accents(work: Path, new_out: dict) -> bool:
     """Save accents.json as accents.prev.json ONLY when the new output
     differs — a no-op accent run must not destroy the record of what

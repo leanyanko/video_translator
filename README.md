@@ -78,7 +78,7 @@ videos where they are not available.
 - **Freshness**: synthesis refuses to run if `accents.json` disagrees with
   `segments_ru.json` (re-run `accent_texts.py`; `run_pipeline` does).
 - **QC** (`scripts/qc_tts.py`): back-transcription flags MISMATCH / EXTRA /
-  LEAD / TAIL / SILENT clips in `qc_tts.json`; fix with
+  LEAD / TAIL / SILENT clips in `qc_tts_f5.json`; fix with
   `synthesize_f5.py --only <ids> --seed 7` and re-assemble.
 
 ---
@@ -180,7 +180,7 @@ venv-f5/bin/python scripts/accent_texts.py work/<id>       # → accents.json (s
 venv/bin/python scripts/make_refs.py work/<id> --max-secs 11.5 --outdir refs_f5 [--tracks]
 venv/bin/python scripts/check_pipeline.py work/<id>        # doctor
 venv-f5/bin/python scripts/synthesize_f5.py work/<id>      # → tts_f5/ (~19 s/segment; --only ids --seed N; --dry-run)
-venv/bin/python scripts/qc_tts.py work/<id>                # → qc_tts.json
+venv/bin/python scripts/qc_tts.py work/<id>                # → qc_tts_f5.json
 venv/bin/python scripts/harvest_laughs.py work/<id> --threshold 0.12   # multitrack: clean laughs → laughs/, segments_ru.json
 venv/bin/python scripts/assemble.py work/<id> --tts-dir tts_f5 --out video_ru.mp4 [--music "work/<id>/tracks/<Music>.mp3"]
 ffmpeg -i work/<id>/video_ru.mp4 -c:v h264_videotoolbox -b:v 6000k -c:a copy -movflags +faststart work/<id>/video_ru_h264.mp4
@@ -247,7 +247,7 @@ map `{"<segment id>": "<Russian text>", ...}` to `apply_translation.py`.
 
 ## 6. Quality control routine
 
-1. Read `qc_tts.json` after every synthesis: `MISMATCH` (heard text far
+1. Read `qc_tts_f5.json` after every synthesis: `MISMATCH` (heard text far
    from the script), `EXTRA` (extra words), `LEAD`/`TAIL` (noise before or
    after the line), `SILENT`. Re-roll the ids with
    `synthesize_f5.py --only <ids> --seed 7`, re-run `qc_tts.py --only <ids>`.

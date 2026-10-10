@@ -54,7 +54,10 @@ SEED = opt("--seed", 42, int)
 REFS = work / ("refs_f5" if (work / "refs_f5").exists() else "refs")
 
 segments = json.loads((work / "segments_ru.json").read_text())["segments"]
-segments = [s for s in segments if s.get("type") != "orig"]  # orig = pasted, not voiced
+# orig = pasted, not voiced; echo = dropped by assemble (synthesizing
+# them burned ~5 min/run on clips that went straight to the bin)
+from manifest_bridge import voiced as _voiced  # noqa: E402
+segments = [s for s in segments if _voiced(s)]
 # slot = time until the next segment starts; used to pace generation.
 # Overlap segments live outside the sequential timeline: they get their
 # own span as slot and must not shrink their neighbours' slots.
@@ -86,18 +89,16 @@ accents = json.loads(accents_path.read_text()) if accents_path.exists() else {}
 # never invalidated.
 from stress_rules import force_name_stress as _fns  # noqa: E402
 from manifest_bridge import (  # noqa: E402
-    load_or_bridge, norm_text as _norm_text, ref_hasher, seg_hash as _seg_hash)
-
-
-def _norm(t: str) -> str:
-    return _norm_text(t, respell=_fns)
-
+    load_or_bridge, ref_hasher, seg_hash as _seg_hash, stale_ids)
 
 # 1. accents.json must exist and match the CURRENT translation; a stale
-#    or missing entry means accent_texts.py was not re-run after editing
-bad = [s["id"] for s in segments
-       if str(s["id"]) not in accents
-       or _norm(accents[str(s["id"])]) != _norm(s.get("text_ru", ""))]
+#    or missing entry means accent_texts.py was not re-run after editing.
+#    Scope: with --only, check only the requested ids — an unrelated
+#    stale line must not block a surgical re-roll; a full run still
+#    checks every segment (that IS the protection).
+scope = (segments if only_ids is None
+         else [s for s in segments if s["id"] in only_ids])
+bad = stale_ids(scope, accents, respell=_fns)
 if bad and not flag("--allow-plain"):
     print(f"ERROR: {len(bad)} segment(s) have missing or STALE stress marks "
           f"(accents.json does not match segments_ru.json): {bad[:20]}"

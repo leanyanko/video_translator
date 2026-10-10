@@ -29,8 +29,9 @@ only_ids = ({int(x) for x in sys.argv[sys.argv.index("--only") + 1].split(",")}
             if "--only" in sys.argv else None)
 
 REFS = work / ("refs_f5" if (work / "refs_f5").exists() else "refs")
+from manifest_bridge import voiced  # orig pastes and echo lines: not voiced
 segments = [s for s in json.loads((work / "segments_ru.json").read_text())["segments"]
-            if s.get("type") != "orig" and s.get("text_ru")]
+            if voiced(s) and s.get("text_ru")]
 outdir = work / outname
 outdir.mkdir(exist_ok=True)
 manifest_path = outdir / "manifest.json"

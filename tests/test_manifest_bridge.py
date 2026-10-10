@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from manifest_bridge import (load_or_bridge, new_hash, old_hash,  # noqa: E402
-                             norm_text, rotate_accents)
+                             norm_text, rotate_accents, stale_ids, voiced)
 
 SEGS = [{"id": 1, "speaker": "SPEAKER_00"}, {"id": 2, "speaker": "SPEAKER_00"},
         {"id": 3, "speaker": "SPEAKER_03"}]
@@ -162,6 +162,41 @@ class ReviewBatchTest(unittest.TestCase):
         self.assertEqual(norm_text("типаж, R&D."), norm_text("тип+аж RD"))
         self.assertEqual(norm_text("слово,слово"), norm_text("слово, слово"))
         self.assertNotEqual(norm_text("старый текст"), norm_text("новый текст"))
+
+
+class StaleIdsTest(unittest.TestCase):
+    """TODO #3: the freshness gate must not hold --only hostage — scope
+    it to the set being synthesized; the full run still checks all."""
+
+    SEGS = [{"id": 5, "speaker": "S", "text_ru": "новый текст пять"},
+            {"id": 42, "speaker": "S", "text_ru": "текст сорок два"}]
+    ACC = {"5": "ст+арый т+екст п+ять",  # 5 edited, accents not re-run
+           "42": "т+екст с+орок дв+а"}
+
+    def test_full_run_catches_the_stale_line(self):
+        self.assertEqual(stale_ids(self.SEGS, self.ACC), [5])
+
+    def test_only_scope_is_not_blocked_by_an_unrelated_edit(self):
+        scope = [s for s in self.SEGS if s["id"] == 42]
+        self.assertEqual(stale_ids(scope, self.ACC), [])
+
+    def test_missing_entry_is_stale(self):
+        self.assertEqual(stale_ids([{"id": 7, "text_ru": "х"}], {}), [7])
+
+    def test_respelling_is_not_an_edit(self):
+        from stress_rules import force_name_stress
+        segs = [{"id": 1, "text_ru": "Дэна Гельбарта"}]
+        acc = {"1": "Д+эна Г+ельберта"}  # dictionary respelling
+        self.assertEqual(stale_ids(segs, acc, respell=force_name_stress), [])
+
+
+class VoicedTest(unittest.TestCase):
+    """TODO #9: orig pastes and echo lines are never synthesized."""
+
+    def test_voiced(self):
+        self.assertTrue(voiced({"id": 1, "text_ru": "х"}))
+        self.assertFalse(voiced({"id": 2, "type": "orig"}))
+        self.assertFalse(voiced({"id": 3, "echo": True, "text_ru": "х"}))
 
 
 if __name__ == "__main__":

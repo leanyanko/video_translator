@@ -37,7 +37,7 @@ Shared tail (both modes):
   synthesize_f5 → tts_f5/ + manifest.json (long; via synth_supervisor.sh,
       which restarts after the random MPS deaths; edited texts/accents/
       refs re-synthesize automatically via the manifest)
-  qc_tts        → qc_tts.json             (back-transcription audit;
+  qc_tts        → qc_tts_f5.json          (back-transcription audit;
       flagged clips are reported, fix with synthesize_f5 --only ... )
   harvest_laughs (multitrack only)        (clean laughs off the stems)
   DOCTOR — abort on failures
@@ -191,16 +191,13 @@ def main() -> None:
     # re-run accent_texts when the doctor would flag it
     need_accents = not (work / "accents.json").exists()
     if not need_accents:
-        import re
         sys.path.insert(0, str(SCRIPTS))
         from stress_rules import force_name_stress
+        from manifest_bridge import stale_ids, voiced
         acc = json.loads((work / "accents.json").read_text())
-        from manifest_bridge import norm_text
-        norm = lambda t: norm_text(t, respell=force_name_stress)  # noqa: E731
-        need_accents = any(
-            s.get("type") != "orig" and s.get("text_ru")
-            and norm(acc.get(str(s["id"]))) != norm(s["text_ru"])
-            for s in json.loads(ru_path.read_text())["segments"])
+        speech = [s for s in json.loads(ru_path.read_text())["segments"]
+                  if voiced(s) and s.get("text_ru")]
+        need_accents = bool(stale_ids(speech, acc, respell=force_name_stress))
     if need_accents:
         run("stress marks (RUAccent + dictionaries, separate process)",
             [PY_F5, SCRIPTS / "accent_texts.py", work])
@@ -253,7 +250,7 @@ def main() -> None:
                          work / "video_ru_h264.mp4"])
     save_timings(work)
     print(f"\nDONE: {work}/video_ru_h264.mp4 (watch) and video_ru.mp4 (upload)")
-    print("Flagged clips from the qc step (if any) are listed in qc_tts.json —")
+    print("Flagged clips from the qc step (if any) are listed in qc_tts_f5.json —")
     print("fix with synthesize_f5.py --only <ids> --seed 7 and rerun this command.")
 
 

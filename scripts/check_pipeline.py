@@ -46,11 +46,8 @@ def warn(stage, msg):
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stress_rules import force_name_stress  # noqa: E402
-from manifest_bridge import load_or_bridge, norm_text, ref_hasher, seg_hash  # noqa: E402
-
-
-def norm(t):
-    return norm_text(t, respell=force_name_stress)
+from manifest_bridge import (  # noqa: E402
+    load_or_bridge, ref_hasher, seg_hash, stale_ids, voiced)
 
 
 def jload(p):
@@ -132,10 +129,12 @@ else:
 if ru is not None:
     if (work / "accents.json").exists():
         acc = jload(work / "accents.json")
-        speech = [s for s in ru if s.get("type") != "orig" and s.get("text_ru")]
+        # echo lines are never voiced (TODO #9) — their accents don't matter
+        speech = [s for s in ru if voiced(s) and s.get("text_ru")]
         missing = [s["id"] for s in speech if str(s["id"]) not in acc]
-        stale = [s["id"] for s in speech if str(s["id"]) in acc
-                 and norm(acc[str(s["id"])]) != norm(s["text_ru"])]
+        bad = stale_ids(speech, acc, respell=force_name_stress)
+        missing_set = set(missing)
+        stale = [i for i in bad if i not in missing_set]
         unmarked = [s["id"] for s in speech if str(s["id"]) in acc
                     and "+" not in acc[str(s["id"])]
                     and len(acc[str(s["id"])]) > 12]
@@ -180,7 +179,7 @@ if ru is not None:
 # ── tts + manifest ──────────────────────────────────────────────────
 tts = work / "tts_f5"
 if ru is not None and tts.exists():
-    speech = [s for s in ru if s.get("type") != "orig" and s.get("text_ru")]
+    speech = [s for s in ru if voiced(s) and s.get("text_ru")]
     missing = [s["id"] for s in speech
                if not (tts / f"seg_{s['id']:04d}.wav").exists()]
     if missing:

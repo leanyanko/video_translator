@@ -157,7 +157,7 @@ venv/bin/python scripts/run_pipeline.py "<youtube-url>"
   нужно перезапустить accent_texts.py — run_pipeline делает это сам).
 - **QC синтеза** — `scripts/qc_tts.py`: каждый клип прогоняется обратно
   через Whisper; MISMATCH/LEAD/TAIL/SILENT-клипы перечисляются в
-  qc_tts.json — чинятся `synthesize_f5.py --only <ids> --seed 7`.
+  qc_tts_f5.json — чинятся `synthesize_f5.py --only <ids> --seed 7`.
 
 Переозвучка после правок segments_ru.json (пересинтезируются только
 изменённые сегменты; голоса берутся из refs_f5/ прошлого прогона):
