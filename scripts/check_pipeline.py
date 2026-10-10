@@ -29,6 +29,10 @@ from pathlib import Path
 
 work = Path(sys.argv[1])
 strict = "--strict" in sys.argv
+# Before synthesis, STALE clips are the synthesizer's to-do list, not a
+# failure — aborting there would block the very stage that fixes them.
+# Before assembly they are a hard failure (stale audio must not ship).
+pre_synth = "--pre-synthesis" in sys.argv
 failures, warnings = [], []
 
 
@@ -206,8 +210,11 @@ if ru is not None and tts.exists():
             if manifest.get(str(s["id"])) != seg_hash(s, acc, rsha):
                 stale.append(s["id"])
         if stale:
-            fail("tts", f"{len(stale)} clips STALE vs current text/accents/"
-                        f"refs: {stale[:15]} — re-run synthesize_f5.py")
+            (warn if pre_synth else fail)(
+                "tts", f"{len(stale)} clips STALE vs current text/accents/"
+                       f"refs: {stale[:15]} — "
+                       + ("synthesize_f5.py will re-sing them"
+                          if pre_synth else "re-run synthesize_f5.py"))
     elif not mpath.exists():
         warn("tts", "no manifest.json — clips cannot be verified against the "
                     "script (synthesize_f5.py writes one on its next run)")

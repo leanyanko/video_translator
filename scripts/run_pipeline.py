@@ -95,8 +95,10 @@ def save_timings(work) -> None:
 
 def doctor(work: Path, when: str) -> None:
     print(f"\n=== doctor ({when})")
-    r = subprocess.run([str(PY), str(SCRIPTS / "check_pipeline.py"), str(work)],
-                       cwd=ROOT)
+    cmd = [str(PY), str(SCRIPTS / "check_pipeline.py"), str(work)]
+    if "before synthesis" in when:
+        cmd.append("--pre-synthesis")
+    r = subprocess.run(cmd, cwd=ROOT)
     if r.returncode != 0:
         save_timings(work)
         sys.exit(f"ABORT: the doctor found failures {when} — fix them and "

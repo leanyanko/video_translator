@@ -42,7 +42,7 @@ for s in old_segs:
 
 new_segs = [s for s in json.loads((new / "segments.json").read_text())["segments"]
             if s.get("type") != "orig"]
-carry, copied = {}, 0
+carry, copied, mapping = {}, 0, []
 (new / "tts_f5").mkdir(exist_ok=True)
 for s in new_segs:
     for o in index.get((s["speaker"], words(s["text"])), ()):
@@ -53,7 +53,53 @@ for s in new_segs:
             if src.exists() and not dst.exists():
                 shutil.copy2(src, dst)
                 copied += 1
+            if dst.exists():
+                mapping.append((s, o))
             break
+
+
+def emit_manifest(new: Path, old: Path, mapping: list) -> int:
+    """Manifest entries for carried clips (review 10-09 #5): without
+    them the manifest-era synthesizer re-sings every copy for hours.
+    Each entry is hash(speaker | OLD run's accented text | NEW ref) —
+    the text the clip was actually sung from — and is written ONLY when
+    the speaker's reference is byte-identical in both runs (a new voice
+    reference means the clip SHOULD re-synthesize). Stale-safe: if the
+    new accent pass changes the text, the hash mismatches and the clip
+    re-sings; a wrong entry can only cause a re-synth, never stale audio.
+    """
+    import hashlib
+    from manifest_bridge import new_hash
+    old_acc_p = old / "accents.json"
+    old_acc = json.loads(old_acc_p.read_text()) if old_acc_p.exists() else {}
+
+    def refsha(base, spk):
+        for name in ("refs_f5", "refs"):
+            p = base / name / f"{spk}.wav"
+            if p.exists():
+                return hashlib.sha1(p.read_bytes()).hexdigest()[:12]
+        return None
+
+    same_ref = {}
+    mpath = new / "tts_f5" / "manifest.json"
+    manifest = json.loads(mpath.read_text()) if mpath.exists() else {}
+    n = 0
+    for s, o in mapping:
+        spk = s["speaker"]
+        if spk not in same_ref:
+            a, b = refsha(old, spk), refsha(new, spk)
+            same_ref[spk] = a is not None and a == b
+        if not same_ref[spk]:
+            continue
+        text = old_acc.get(str(o["id"]), o.get("text_ru", ""))
+        manifest[str(s["id"])] = new_hash(spk, text, refsha(new, spk))
+        n += 1
+    mpath.write_text(json.dumps(manifest, indent=1))
+    return n
+
+
+n_manifest = emit_manifest(new, old, mapping)
 out.write_text(json.dumps(carry, ensure_ascii=False, indent=0))
-print(f"{len(carry)}/{len(new_segs)} segments carried over ({copied} clips copied) -> {out}; "
+print(f"{len(carry)}/{len(new_segs)} segments carried over ({copied} clips copied, "
+      f"{n_manifest} manifest entries) -> {out}; "
       f"{len(new_segs) - len(carry)} need translation + synthesis")
