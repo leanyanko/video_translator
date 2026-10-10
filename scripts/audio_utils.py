@@ -184,14 +184,18 @@ def lone_sfx_gain(bed_rms, dub_loud, reach: int = 3,
     # Anchoring on merely speech-ADJACENT frames lets a foley burst that
     # straddles the speech boundary become its own reference and pass.
     anchors = np.asarray(dub_loud, bool)
-    ref_l = np.zeros(n, np.float32)
-    cur = 0.0
+    # running reference starts at +inf: BEFORE the first dub line (and
+    # after the last) there is no anchor, and a 0-init would collapse
+    # the reference to the noise floor — ducking e.g. a 1 s intro
+    # stinger at the episode edge (review 10-10)
+    ref_l = np.full(n, np.inf, np.float32)
+    cur = np.inf
     for i in range(n):
         if anchors[i]:
             cur = bed_rms[i]
         ref_l[i] = cur
-    ref_r = np.zeros(n, np.float32)
-    cur = 0.0
+    ref_r = np.full(n, np.inf, np.float32)
+    cur = np.inf
     for i in range(n - 1, -1, -1):
         if anchors[i]:
             cur = bed_rms[i]
@@ -200,8 +204,12 @@ def lone_sfx_gain(bed_rms, dub_loud, reach: int = 3,
     # level, passes), while foley straddling one speech edge poisons
     # only ITS side's anchor — the opposite side stays honest and low.
     ref = np.minimum(ref_l, ref_r)
-    pokes = lone & (bed_rms > poke_ratio * np.maximum(ref, noise_floor)) \
-            & (bed_rms > noise_floor)
+    # judge only sounds BRACKETED by speech: a frame with no anchor on
+    # one side (before the first line / after the last) gets no verdict
+    # — an intro stinger is not foley
+    both_anchored = np.isfinite(ref_l) & np.isfinite(ref_r)
+    pokes = lone & both_anchored & (bed_rms > noise_floor) \
+            & (bed_rms > poke_ratio * np.maximum(ref, noise_floor))
     # cap run length: a long "transient" is music, not foley
     gain = np.ones(n, np.float32)
     i = 0
@@ -209,11 +217,15 @@ def lone_sfx_gain(bed_rms, dub_loud, reach: int = 3,
         if not pokes[i]:
             i += 1
             continue
+        # the run that must stay short is the POKE run itself — walking
+        # the whole audible lone stretch made the cap swallow every
+        # pause with underscore playing (review 10-10: gate was a no-op
+        # for foley over music)
         j = i
-        while j < n and lone[j] and bed_rms[j] > noise_floor:
+        while j < n and pokes[j]:
             j += 1
         if (j - i) <= max_run:
-            gain[i:j][pokes[i:j]] = duck
+            gain[i:j] = duck
         i = j
     return gain
 

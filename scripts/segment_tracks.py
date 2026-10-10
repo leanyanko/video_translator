@@ -248,8 +248,47 @@ for s in segments:
         s["_conf"] = sum(w["prob"] for w in ws) / len(ws)
 
 from audio_utils import raw_stem_source  # noqa: E402
+from bleed import OWN_OVER_BLEED, bleed_expected, calibrate  # noqa: E402
 
 paste_speakers, paste_dir = raw_stem_source(work)
+# Which copy to paste from is PER KIND (review 10-10 #3):
+#   nonverbal (ha-ha, mm-hmm) — always RAW: cleaning mutes exactly these;
+#   low_conf — often garbled BECAUSE of crosstalk, and the raw cut would
+#     bring the other speaker's English back where the cleaned copy had
+#     it muted. Decide per segment with the calibrated bleed model: RAW
+#     when the owner's own level beats expected bleed, else the CLEANED
+#     copy.
+_speech_spans = {}
+for s in segments:
+    _speech_spans.setdefault(s["speaker"], []).append((s["start"], s["end"]))
+_raw_rms = {}
+for spk, fname in paste_speakers.items():
+    _audio = decode(paste_dir / fname, 16000)
+    _raw_rms[spk] = np.sqrt(
+        (_audio[: len(_audio) // 4000 * 4000].reshape(-1, 4000) ** 2).mean(1))
+_coeffs = calibrate(_raw_rms, _speech_spans, 0.25)
+
+
+def _span_rms(spk, a, b):
+    r = _raw_rms[spk][int(a / 0.25): max(int(b / 0.25), int(a / 0.25) + 1)]
+    return float(r.mean()) if len(r) else 0.0
+
+
+def low_conf_source(spk, a, b):
+    """(dir, speakers_map, tag) for a low_conf paste: raw when the
+    owner's own raw level beats what calibrated bleed would explain."""
+    own = _span_rms(spk, a, b)
+    others = {o: _span_rms(o, a, b) for o in _raw_rms if o != spk}
+    expected = bleed_expected(_coeffs, spk, others)
+    if expected is not None:
+        raw_ok = own > OWN_OVER_BLEED * expected
+    else:  # uncalibrated pair: fixed-ratio fallback, same as harvest
+        raw_ok = max(others.values(), default=0.0) < 6.0 * own
+    if raw_ok:
+        return paste_dir, paste_speakers, "raw"
+    return work / "tracks", tracks_meta["speakers"], "cleaned"
+
+
 nonverbal_dir = work / "nonverbal"
 n_nonverbal = n_lowconf = n_flagged = 0
 for s in segments:
@@ -262,12 +301,20 @@ for s in segments:
         n_flagged += 1
     if not low and not NONVERBAL.match(s["text"].strip()):
         continue
+    if low:
+        src_dir, src_map, src_tag = low_conf_source(
+            s["speaker"], s["start"], s["end"])
+        if src_tag == "cleaned":
+            print(f"  low_conf paste {s['speaker'][-2:]} {s['start']:.1f}s: "
+                  "CLEANED copy (raw would bring crosstalk back)")
+    else:
+        src_dir, src_map, src_tag = paste_dir, paste_speakers, "raw"
     nonverbal_dir.mkdir(exist_ok=True)
     wav = nonverbal_dir / f"{s['speaker']}_{int(s['start'] * 10):06d}.wav"
     subprocess.check_call([
         "ffmpeg", "-y", "-v", "error", "-ss", f"{s['start']:.3f}",
         "-t", f"{s['end'] - s['start']:.3f}",
-        "-i", str(paste_dir / paste_speakers[s["speaker"]]),
+        "-i", str(src_dir / src_map[s["speaker"]]),
         "-ar", "44100", "-ac", "1", str(wav)])
     s["type"] = "orig"
     s["file"] = f"nonverbal/{wav.name}"

@@ -169,5 +169,40 @@ class LoneSfxGateTest(unittest.TestCase):
         self.assertTrue((self.np.diff(mid) <= 1e-6).all())  # monotone down
         self.assertTrue(0.01 < g[99] < 1.0, "step must be ramped, not hard")
 
+    def test_foley_over_underscore_music_is_ducked(self):
+        # review 10-10: run-cap must walk POKE frames, not the whole
+        # audible pause — with music playing the pause is always long
+        from audio_utils import lone_sfx_gain
+        bed = [0.03] * 12 + [0.12] * 3 + [0.03] * 25  # burst over bed
+        dub = [True] * 6 + [False] * 28 + [True] * 6
+        g = lone_sfx_gain(bed, dub)
+        self.assertTrue((g[12:15] < 1.0).all(), "burst over music must duck")
+        self.assertTrue((g[:12] == 1.0).all() and (g[15:] == 1.0).all(),
+                        "the underscore itself must stay")
+
+    def test_edge_sound_before_first_speech_is_not_ducked(self):
+        # review 10-10: missing anchor must mean "no judgement", not
+        # "reference zero" — an intro stinger is not foley
+        from audio_utils import lone_sfx_gain
+        bed = [0.0] * 5 + [0.2] * 10 + [0.0] * 10 + [0.0] * 15
+        dub = [False] * 25 + [True] * 15
+        g = lone_sfx_gain(bed, dub)
+        self.assertTrue((g == 1.0).all(), "edge stinger must pass untouched")
+
+class LowConfSourceRuleTest(unittest.TestCase):
+    """segment_tracks pastes low_conf from RAW only when the owner's
+    level beats calibrated bleed — otherwise raw would re-import the
+    crosstalk that made the line low-confidence in the first place."""
+
+    def test_own_voice_beats_bleed_raw(self):
+        from bleed import bleed_expected, OWN_OVER_BLEED
+        exp = bleed_expected({("M", "D"): 0.05}, "M", {"D": 0.2})
+        self.assertGreater(0.06, OWN_OVER_BLEED * exp)   # raw
+
+    def test_crosstalk_garble_goes_cleaned(self):
+        from bleed import bleed_expected, OWN_OVER_BLEED
+        exp = bleed_expected({("M", "D"): 0.05}, "M", {"D": 0.3})
+        self.assertLessEqual(0.02, OWN_OVER_BLEED * exp)  # cleaned
+
 if __name__ == "__main__":
     unittest.main()

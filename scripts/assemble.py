@@ -217,19 +217,38 @@ if flag("--music"):
             raw = seg.raw_data
             ch, wid = seg.channels, seg.sample_width
             dt = {1: np.int8, 2: np.int16, 4: np.int32}[wid]
+            # normalization is PER SEGMENT: the bed may be 32-bit FLAC
+            # while the canvas is 16-bit — one shared divisor crushed
+            # the canvas to ~1e-5 and the gate saw eternal silence
+            seg_full = 1 << (8 * wid - 1)
             for i in range(0, m, step):
                 j = min(i + step, m)
                 buf = np.frombuffer(
                     raw[i * fr * ch * wid: j * fr * ch * wid], dtype=dt)
-                x = buf.astype(np.float32).reshape(-1, ch).mean(axis=1) / full
+                x = buf.astype(np.float32).reshape(-1, ch).mean(axis=1) / seg_full
                 out[i:j] = np.sqrt((x.reshape(j - i, fr) ** 2).mean(axis=1))
             return out
 
-        n = len(bed) // fr
-        m = min(n, len(canvas) // fr)
+        # pydub len() is MILLISECONDS — frame counts must come from the
+        # raw byte buffers (this very bug made the gate process 3.6 s
+        # of a 161 s clip and duck nothing)
+        def n_frames(seg):
+            return len(seg.raw_data) // (fr * seg.channels * seg.sample_width)
+
+        n = n_frames(bed)
+        m = min(n, n_frames(canvas))
         bed_rms = frames_rms_chunked(bed, n)
         dub_loud = np.zeros(n, bool)
         dub_loud[:m] = frames_rms_chunked(canvas, m) > 10 ** (-38 / 20)
+        if flag("--sfx-debug"):
+            print(f"  sfxdbg canvas: ch={canvas.channels} w={canvas.sample_width} "
+                  f"fr={canvas.frame_rate} max={canvas.max} n={n} m={m}")
+            print(f"  sfxdbg bed   : ch={bed.channels} w={bed.sample_width} "
+                  f"fr={bed.frame_rate}")
+            cvr = frames_rms_chunked(canvas, m)
+            for i in range(40, min(70, m)):
+                print(f"  sfxdbg t={i/10:.1f} canvas={cvr[i]:.5f} "
+                      f"bed={bed_rms[i]:.5f} loud={int(dub_loud[i])}")
         gain_f = lone_sfx_gain(bed_rms, dub_loud)
         if (gain_f < 1.0).any():
             dt = {1: np.int8, 2: np.int16, 4: np.int32}[bed.sample_width]
