@@ -11,8 +11,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from manifest_bridge import (load_or_bridge, new_hash, old_hash,  # noqa: E402
-                             norm_text, rotate_accents, stale_ids, voiced)
+from manifest_bridge import (load_or_bridge, missing_clips,  # noqa: E402
+                             new_hash, old_hash, norm_text, rotate_accents,
+                             stale_ids, voiced)
 
 SEGS = [{"id": 1, "speaker": "SPEAKER_00"}, {"id": 2, "speaker": "SPEAKER_00"},
         {"id": 3, "speaker": "SPEAKER_03"}]
@@ -188,6 +189,19 @@ class StaleIdsTest(unittest.TestCase):
         segs = [{"id": 1, "text_ru": "Дэна Гельбарта"}]
         acc = {"1": "Д+эна Г+ельберта"}  # dictionary respelling
         self.assertEqual(stale_ids(segs, acc, respell=force_name_stress), [])
+
+
+class MissingClipsTest(unittest.TestCase):
+    """TODO #4: absent and trivially-empty clips both count as missing —
+    a crashed synth leaves 0-byte wavs that exists() alone blesses."""
+
+    def test_absent_and_empty_are_missing(self):
+        with TemporaryDirectory() as tmp:
+            tts = Path(tmp)
+            (tts / "seg_0001.wav").write_bytes(b"\0" * 4096)  # fine
+            (tts / "seg_0002.wav").write_bytes(b"RIFF")       # crashed
+            segs = [{"id": 1}, {"id": 2}, {"id": 3}]          # 3 absent
+            self.assertEqual(missing_clips(segs, tts), [2, 3])
 
 
 class VoicedTest(unittest.TestCase):

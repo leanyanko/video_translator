@@ -39,6 +39,28 @@ tts_dir = work / tts_name
 tmp = work / "tmp"
 tmp.mkdir(exist_ok=True)
 
+# partial-build gate (TODO #4): when synthesis failed wholesale, the old
+# behaviour printed a WARNING per clip and still shipped a "finished"
+# video of music and pastes (10-09: Chatterbox died on a dependency,
+# tts_cbx stayed empty, assemble reported DONE on 0/22 clips). A few
+# missing clips are survivable noise; a large share is a broken run.
+from manifest_bridge import missing_clips  # noqa: E402
+
+voiced = [s for s in segments + overlap_segments if s.get("type") != "orig"]
+_missing = missing_clips(voiced, tts_dir)
+if _missing and voiced and not flag("--force-partial"):
+    share = len(_missing) / len(voiced)
+    if share > 0.10:
+        sys.exit(f"ABORT: {len(_missing)}/{len(voiced)} voiced segments have "
+                 f"no usable clip in {tts_dir.name}/ ({share:.0%} > 10%) — "
+                 f"ids {sorted(_missing)[:20]}"
+                 f"{'...' if len(_missing) > 20 else ''}. Run synthesize "
+                 "first, or pass --force-partial to assemble anyway.")
+if _missing:
+    print(f"NOTE: {len(_missing)}/{len(voiced)} clips missing/empty — "
+          "assembling without them"
+          + (" (--force-partial)" if flag("--force-partial") else ""))
+
 
 video_dur = probe_duration(work / "video.mp4")
 canvas = AudioSegment.silent(duration=int(video_dur * 1000), frame_rate=SR).set_channels(2)

@@ -56,6 +56,20 @@ def voiced(seg: dict) -> bool:
     return seg.get("type") != "orig" and not seg.get("echo")
 
 
+def missing_clips(segments: list, tts_dir: Path, min_bytes: int = 1024) -> list:
+    """ids of voiced segments whose clip is absent or trivially empty
+    (< min_bytes cannot hold audible speech — a crashed synth leaves
+    0-byte wavs). Shared by assemble's partial-build gate and the
+    doctor (TODO #4): a dir where synthesis failed wholesale must not
+    quietly become a 'finished' video of music and pastes."""
+    out = []
+    for s in segments:
+        p = Path(tts_dir) / f"seg_{s['id']:04d}.wav"
+        if not p.exists() or p.stat().st_size < min_bytes:
+            out.append(s["id"])
+    return out
+
+
 def stale_ids(segments: list, accents: dict, respell=None) -> list:
     """ids whose accents.json entry is missing or no longer matches the
     segment's CURRENT text_ru — i.e. accent_texts.py was not re-run

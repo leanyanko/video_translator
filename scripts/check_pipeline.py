@@ -47,7 +47,7 @@ def warn(stage, msg):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stress_rules import force_name_stress  # noqa: E402
 from manifest_bridge import (  # noqa: E402
-    load_or_bridge, ref_hasher, seg_hash, stale_ids, voiced)
+    load_or_bridge, missing_clips, ref_hasher, seg_hash, stale_ids, voiced)
 
 
 def jload(p):
@@ -180,10 +180,18 @@ if ru is not None:
 tts = work / "tts_f5"
 if ru is not None and tts.exists():
     speech = [s for s in ru if voiced(s) and s.get("text_ru")]
-    missing = [s["id"] for s in speech
-               if not (tts / f"seg_{s['id']:04d}.wav").exists()]
+    missing = missing_clips(speech, tts)
     if missing:
-        warn("tts", f"{len(missing)} clips not yet synthesized: {missing[:15]}")
+        # before synthesis this IS the synthesizer's to-do list; before
+        # assembly a large share means synthesis failed wholesale and
+        # the "finished" video would be music and pastes (TODO #4)
+        share = len(missing) / len(speech) if speech else 0
+        (warn if pre_synth or share <= 0.10 else fail)(
+            "tts", f"{len(missing)}/{len(speech)} clips missing or empty "
+                   f"({share:.0%}): {missing[:15]}"
+                   + ("" if pre_synth else
+                      " — run synthesize_f5.py (assemble --force-partial "
+                      "to override)"))
     mpath = tts / "manifest.json"
     if (work / "accents.json").exists() and (mpath.exists() or speech):
         acc = jload(work / "accents.json")
