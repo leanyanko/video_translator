@@ -19,6 +19,8 @@ import numpy as np
 RMS_SILENCE = 0.0056
 SCAN_FRAME = 0.25
 SCAN_SR = 16000
+VOICED_REL = 0.0316  # -30 dB of a clip's own p99 RMS: 'voiced' for the
+                     # pre-flight (synthesize pace.json) and the trim decay floor
 
 # reference audition (make_refs picks, check_pipeline re-verifies):
 # 50 ms frames; voiced = rms above max(absolute floor, 10 % of the clip's

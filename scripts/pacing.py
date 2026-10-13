@@ -25,9 +25,10 @@ The rule here: a dubbed line lasts as long as the ORIGINAL line — that
 is how long the speaker's lips move, and the old pipeline matched it
 only by accident (x1.9 bytes / 1.3 speed / 1.35 atempo ≈ x1.08). The
 span is bounded to a plausible Russian tempo: never faster than
-PACE_MAX (a long translation overruns into the slot instead, squeezed
-at most MAX_SQUEEZE beyond that) and never slower than PACE_MIN (a
-hesitant original does not make the dub drawl). A first version paced
+PACE_MAX (a long translation overruns into the slot instead; F5 is
+never asked to articulate faster than that — any further squeeze is
+assemble's atempo, a time-stretch of a clean rendering) and never
+slower than PACE_MIN (a hesitant original does not make the dub drawl). A first version paced
 lines by the speaker's REFERENCE tempo instead; it lost lip sync (Dan
 20–30 % shorter than his lips), kept Misha slow (his reference is
 slow) and swallowed words. The result goes to F5 as an exact duration
@@ -52,7 +53,6 @@ PACE_MAX = 13.0       # chars/s; faster than this swallows words, the line overr
                       # (apply_translation, check_pipeline import it): if the
                       # translation is budgeted at 13 ch/s, F5 must sing 13.
                       # 15 was tried (traps v7-v9): endings swallowed by ear.
-MAX_SQUEEZE = 1.3     # how far past PACE_MAX a line may go to fit its slot
 SLOT_FILL = 0.95      # share of the slot a line may occupy
 SILENCE_PAD = 0.5     # sec of lead+tail silence F5 paints per call (0.46-0.67
                       # on single-piece traps clips); trimmed away after
@@ -60,7 +60,7 @@ PIECE_MIN_SECS = 0.4  # speech floor per piece: a 3-letter piece at tempo is
                       # ~0.25 s and comes out clipped; F5's own answer was speed 0.3
 PIECE_GAP = 0.35      # sec of air between pieces (sentence ends): 0.15 made
                       # the last syllable sound clipped by ear (traps 1:07, 10-13)
-PACE_VERSION = "pace6"  # manifest salt: clips sung under older pacing are stale
+PACE_VERSION = "pace7"  # manifest salt: clips sung under older pacing are stale
 
 
 def pace_chars(text: str) -> int:
@@ -73,16 +73,17 @@ def plan_clip(chars: int, span_secs: float, slot_secs: float) -> tuple:
     """(wanted_secs, rate) for a line of `chars` whose original lasted
     `span_secs` and whose slot (until the next line) is `slot_secs`.
     The original span, bounded to [chars/PACE_MAX, chars/PACE_MIN];
-    when that does not fit SLOT_FILL of the slot, as fast as needed but
-    never beyond PACE_MAX * MAX_SQUEEZE — past that the line overruns
-    (assemble's atempo takes it from there). `rate` is the resulting
-    chars/s, for the log and the doctor."""
+    when that does not fit SLOT_FILL of the slot, shortened towards it
+    but never below chars/PACE_MAX — past that the line overruns and
+    assemble's atempo (<= MAX_TEMPO) takes it from there, so the whole
+    chain never asks F5 to articulate above PACE_MAX (review 10-13,
+    s30). `rate` is the resulting chars/s, for the log and the doctor."""
     fastest = chars / PACE_MAX
     slowest = chars / PACE_MIN
     wanted = min(max(span_secs, fastest), slowest)
     budget = slot_secs * SLOT_FILL
     if wanted > budget:
-        wanted = max(budget, fastest / MAX_SQUEEZE)
+        wanted = max(budget, fastest)
     return wanted, (chars / wanted if wanted > 0 else 0.0)
 
 

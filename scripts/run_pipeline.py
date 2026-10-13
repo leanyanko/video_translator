@@ -215,6 +215,12 @@ def main() -> None:
 
     run("qc: back-transcribe every clip",
         [PY, SCRIPTS / "qc_tts.py", work])
+    # F5 renders the same line differently from run to run; QC hears the
+    # gross failures. Flagged / low-sim clips are re-sung up a short
+    # ladder and kept only when QC improves (reroll_qc.py, d6).
+    if "--no-reroll" not in sys.argv:
+        run("qc re-roll of flagged clips",
+            [PY, SCRIPTS / "reroll_qc.py", work])
 
     if multitrack:
         sys.path.insert(0, str(SCRIPTS))

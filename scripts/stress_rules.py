@@ -101,3 +101,27 @@ def apply_homographs(text_ru: str, text_en: str | None) -> str:
 
 def resolve(text_ru: str, text_en: str | None) -> str:
     return apply_homographs(apply_name_stress(text_ru), text_en)
+
+
+def _mark_key(word: str) -> str:
+    """Lookup key for a (possibly marked) word: no '+', ё folded to е,
+    lowercase. RUAccent ёfies as it marks («самое» → «само+ё», «еще» →
+    «ещё»), so without the fold a marked word misses its own override
+    (s6)."""
+    return word.replace("+", "").replace("ё", "е").replace("Ё", "Е").lower()
+
+
+def reapply_translator_marks(marked_src: str, accented: str) -> str:
+    """Stress marks placed upstream are law: any word carrying '+' in
+    `marked_src` (translator text, or the dictionary pass) replaces
+    RUAccent's choice for that word in `accented`."""
+    overrides = {}
+    for token in marked_src.split():
+        core = token.strip(".,!?…;:—()«»\"'")
+        if "+" in core:
+            overrides[_mark_key(core)] = core
+    if not overrides:
+        return accented
+    return re.sub(r"[\w+ёЁ-]+",
+                  lambda m: overrides.get(_mark_key(m.group(0)), m.group(0)),
+                  accented)

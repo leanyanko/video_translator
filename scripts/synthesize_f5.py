@@ -52,6 +52,10 @@ limit_secs = opt("--limit-secs", None, float)
 # --only: comma-separated ids; existing files are re-rolled
 only_ids = opt("--only", None, lambda v: {int(x) for x in v.split(",")})
 SEED = opt("--seed", 42, int)
+# --room 1.1: ask F5 for 10 % more time per piece than the plan — one rung of
+# the QC re-roll ladder (reroll_qc.py): a crammed rendering is what a too-tight
+# fix_duration produces, and the same text at another duration renders anew
+ROOM = opt("--room", 1.0, float)
 
 # F5 refs must be <=~11.5s with exactly matching text (F5 clips ref audio
 # at 12s internally; longer refs desync text/audio and garble output)
@@ -190,7 +194,7 @@ import soundfile as sf
 # is used, not the file's. tts_f5/pace.json records the plan per clip
 # for the doctor and for re-measuring what atempo is left downstream.
 from f5_tts.infer.utils_infer import preprocess_ref_audio_text  # noqa: E402
-from audio_utils import join_trimmed  # noqa: E402
+from audio_utils import VOICED_REL, join_trimmed  # noqa: E402
 from pacing import (PIECE_GAP, allocate_pieces, pace_chars,  # noqa: E402
                     plan_clip)
 
@@ -226,6 +230,7 @@ for n, seg in enumerate(todo, 1):
     chars = pace_chars(text)
     span = seg["end"] - seg["start"]
     wanted, rate = plan_clip(chars, span, slots[seg["id"]])
+    wanted *= ROOM
     cap = min(150, int(piece_cap[spk] * 0.9))
     pieces = split_single_batch(text, cap)
     waves = []
@@ -248,10 +253,18 @@ for n, seg in enumerate(todo, 1):
     sf.write(outdir / f"seg_{seg['id']:04d}.wav", out_wav, sr_out)
     manifest[str(seg["id"])] = seg_hash(seg)
     manifest_path.write_text(json.dumps(manifest, indent=1))
+    # voiced = seconds of frames above -30 dB of the clip's own p99: speech
+    # proper, as opposed to the trimmed total that still holds the pauses
+    # (the pre-flight reports both — review 10-13)
+    _fr = sr_out // 50
+    _n = len(out_wav) // _fr
+    _rms = np.sqrt((out_wav[: _n * _fr].reshape(_n, _fr) ** 2).mean(axis=1)) if _n else np.zeros(0)
+    _voiced = float((_rms > VOICED_REL * np.percentile(_rms, 99)).sum() * _fr / sr_out) if _n else 0.0
     pace_log[str(seg["id"])] = {
         "chars": chars, "span": round(span, 2), "wanted": round(wanted, 2),
         "slot": round(slots[seg["id"]], 2), "rate": round(rate, 1),
-        "pieces": len(pieces), "speech": round(len(out_wav) / sr_out, 2)}
+        "pieces": len(pieces), "speech": round(len(out_wav) / sr_out, 2),
+        "voiced": round(_voiced, 2), "room": ROOM}
     pace_path.write_text(json.dumps(pace_log, indent=1))
     per_seg = (time.time() - t_start) / n
     print(f"[{n}/{len(todo)}] seg {seg['id']:04d} {spk} {chars} chars, "
@@ -263,8 +276,12 @@ for n, seg in enumerate(todo, 1):
 # before assemble's atempo — target 0.95-1.10
 _ratios = sorted(pace_log[str(s["id"])]["speech"] / pace_log[str(s["id"])]["span"]
                  for s in todo if pace_log.get(str(s["id"]), {}).get("span", 0) > 0.3)
+_voiced_r = sorted(pace_log[str(s["id"])]["voiced"] / pace_log[str(s["id"])]["span"]
+                   for s in todo if pace_log.get(str(s["id"]), {}).get("span", 0) > 0.3
+                   and "voiced" in pace_log[str(s["id"])])
 if _ratios:
     print(f"speech/span over {len(_ratios)} clips: median "
           f"{_ratios[len(_ratios) // 2]:.2f}, min {_ratios[0]:.2f}, "
-          f"max {_ratios[-1]:.2f} (target 0.95-1.10)")
+          f"max {_ratios[-1]:.2f} (target 0.95-1.10)"
+          + (f"; voiced/span median {_voiced_r[len(_voiced_r) // 2]:.2f}" if _voiced_r else ""))
 print("done")

@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from pacing import (MAX_SQUEEZE, PACE_MAX, PACE_MIN, PIECE_MIN_SECS,  # noqa: E402
-                    SILENCE_PAD, allocate_pieces, pace_chars, plan_clip)
+from pacing import (PACE_MAX, PACE_MIN, PIECE_MIN_SECS, SILENCE_PAD,  # noqa: E402
+                    allocate_pieces, pace_chars, plan_clip)
 
 
 class PaceCharsTest(unittest.TestCase):
@@ -32,19 +32,16 @@ class PlanClipTest(unittest.TestCase):
         self.assertAlmostEqual(wanted, 45 / PACE_MIN)
         self.assertAlmostEqual(rate, PACE_MIN)
 
-    def test_squeezed_to_the_slot_but_capped(self):
+    def test_squeezed_to_the_slot_but_never_past_pace_max(self):
         # 150 chars, original 5 s: at PACE_MAX the line needs 150/PACE_MAX;
-        # a slot whose 95 % is a bit shorter squeezes it to that budget
-        # (still under PACE_MAX * MAX_SQUEEZE)
-        slot = (150 / PACE_MAX) * 0.9 / 0.95
-        wanted, rate = plan_clip(150, 5.0, slot)
-        self.assertAlmostEqual(wanted, slot * 0.95)
-        self.assertAlmostEqual(rate, 150 / (slot * 0.95))
-        self.assertLess(rate, PACE_MAX * MAX_SQUEEZE)
-        # slot 3 s: the cap binds, the line overruns
+        # a slot whose 95 % is a bit shorter squeezes it only down to that
+        # — the rest overruns for assemble's atempo (no native squeeze)
+        fastest = 150 / PACE_MAX
+        wanted, rate = plan_clip(150, 5.0, fastest * 0.9 / 0.95)
+        self.assertAlmostEqual(wanted, fastest)
+        self.assertAlmostEqual(rate, PACE_MAX)
         wanted, rate = plan_clip(150, 5.0, 3.0)
-        self.assertAlmostEqual(wanted, 150 / PACE_MAX / MAX_SQUEEZE)
-        self.assertAlmostEqual(rate, PACE_MAX * MAX_SQUEEZE)
+        self.assertAlmostEqual(wanted, fastest)  # tight slot: still PACE_MAX
 
 
 class AllocatePiecesTest(unittest.TestCase):

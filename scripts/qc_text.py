@@ -20,6 +20,12 @@ of similarity instead of a guaranteed token mismatch.
 import re
 from difflib import SequenceMatcher
 
+# similarity thresholds — one home for qc_tts (flags) and reroll_qc (re-sing),
+# so the two cannot drift (s24). SIM_REROLL: on traps 10-13 every bad
+# rendering of line 9 scored 0.59-0.80, every good one 1.00 (s25 class).
+SIM_MIN = 0.75      # below: MISMATCH flag
+SIM_REROLL = 0.9    # below (or any flag): re-sing up the ladder
+
 _UNITS = ["", "один", "два", "три", "четыре", "пять", "шесть", "семь",
           "восемь", "девять"]
 _UNITS_F = ["", "одна", "две"] + _UNITS[3:]

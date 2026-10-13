@@ -4,7 +4,23 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from stress_rules import apply_homographs, apply_name_stress, resolve
+from stress_rules import (apply_homographs, apply_name_stress,
+                          reapply_translator_marks, resolve)
+
+
+class TestTranslatorMarks(unittest.TestCase):
+    def test_translator_mark_overrides_ruaccent(self):
+        self.assertEqual(reapply_translator_marks("з+амок стоит", "зам+ок сто+ит"),
+                         "з+амок сто+ит")
+
+    def test_override_survives_ruaccent_yofication(self):
+        # s6: RUAccent returns «само+ё»; the override keyed on «самое» must still hit
+        self.assertEqual(reapply_translator_marks("то же с+амое", "т+о же само+ё"),
+                         "т+о же с+амое")
+
+    def test_no_marks_passes_through(self):
+        self.assertEqual(reapply_translator_marks("просто текст", "пр+осто т+екст"),
+                         "пр+осто т+екст")
 
 
 class TestNameStress(unittest.TestCase):

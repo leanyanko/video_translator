@@ -34,10 +34,9 @@ import soundfile as sf
 
 from cli_args import opt
 from manifest_bridge import voiced
-from qc_text import script_sim
+from qc_text import SIM_MIN, script_sim
 
 MODEL = "mlx-community/whisper-large-v3-turbo"
-SIM_MIN = 0.75
 TAIL_SECS = 0.8
 LOUD = 0.02  # amplitude treated as sound for lead/tail measurement
 

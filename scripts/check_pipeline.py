@@ -19,7 +19,9 @@ Checks, in pipeline order (multitrack checks are skipped in mix mode):
              CURRENT text_ru (stale accents sing the old text — e1v5 bug)
   refs       one wav+txt per speaker; 4-11.6 s; head silence <=0.3 s
   tts        every speech segment has a clip; manifest.json hash matches
-             speaker|accents|ref (stale clip = old text with old voice)
+             speaker|accents|ref (stale clip = old text with old voice);
+             no clip left flagged by QC after reroll_qc.py (FAIL before
+             assembly, WARN before synthesis)
   orig       every type:"orig" file= exists; no auto paste > 4 s; harvest's
              speech check found no untranscribed speech (FAIL at >= 3
              words, WARN below — harvest_report.json)
@@ -294,6 +296,22 @@ if ru is not None and tts.exists():
     elif not mpath.exists():
         warn("tts", "no manifest.json — clips cannot be verified against the "
                     "script (synthesize_f5.py writes one on its next run)")
+    # QC gate (d6): qc_<tts>.json is whisper's verdict per clip. A clip
+    # still flagged after reroll_qc.py tried its ladder is a rendering QC
+    # could not fix — it does not ship silently: fix the line (text,
+    # reference) or accept it on record
+    qc_path = work / f"qc_{tts.name}.json"
+    if qc_path.exists():
+        qcj = jload(qc_path)
+        flagged = sorted((k for k, v in qcj.items() if v.get("flags")), key=int)
+        rerolled = (work / "reroll_report.json").exists()
+        if flagged:
+            (warn if pre_synth or not rerolled else fail)(
+                "tts", f"{len(flagged)} clip(s) flagged by QC"
+                + (" after re-roll" if rerolled else " (reroll_qc.py not run yet)")
+                + ": " + "; ".join(f"seg {k} {','.join(qcj[k]['flags'])} sim "
+                                   f"{qcj[k].get('sim', 0):.2f}" for k in flagged[:10])
+                + " — fix the line (text, reference) or accept on record")
 
 # ── orig files ──────────────────────────────────────────────────────
 PASTE_MAX_SECS = 4.0  # sec; laughs measured 0.7-3 s on exp_traps_v3/e1v6
