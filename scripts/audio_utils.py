@@ -55,6 +55,43 @@ def decode(path, sr: int = SCAN_SR, start: float | None = None,
     return np.frombuffer(out.stdout, dtype=np.float32)
 
 
+def speech_bounds(data: np.ndarray, sr: int, floor: float = 0.01,
+                  rel: float = 0.1, margin: float = 0.05):
+    """(lo, hi) sample bounds of the speech inside a TTS clip, or None
+    when it is all silence. The rule assemble.trim_silence uses: RMS
+    over 20 ms frames, threshold = max(floor, rel × the clip's own 99th
+    percentile) so quiet painted lead/tail breath does not count as
+    onset; `margin` seconds of air kept on both sides."""
+    frame = sr // 50
+    n = len(data) // frame
+    if n == 0:
+        return None
+    rms = np.sqrt((data[: n * frame].reshape(n, frame) ** 2).mean(axis=1))
+    thr = max(floor, rel * float(np.percentile(rms, 99)))
+    voiced = np.where(rms > thr)[0]
+    if len(voiced) == 0:
+        return None
+    lo = max(0, voiced[0] * frame - int(margin * sr))
+    hi = min(len(data), (voiced[-1] + 1) * frame + int(margin * sr))
+    return lo, hi
+
+
+def join_trimmed(waves: list, sr: int, gap_secs: float) -> np.ndarray:
+    """Concatenate TTS pieces with each piece's painted lead/tail silence
+    cut (speech_bounds) and `gap_secs` of air between them, so the
+    speech that remains ≈ the sum of the per-piece plans (pacing)."""
+    out = []
+    for w in waves:
+        w = np.asarray(w, dtype=np.float32)
+        b = speech_bounds(w, sr)
+        if b is not None:
+            w = w[b[0]: b[1]]
+        if out:
+            out.append(np.zeros(int(gap_secs * sr), dtype=np.float32))
+        out.append(w)
+    return np.concatenate(out) if out else np.zeros(0, dtype=np.float32)
+
+
 def frame_rms(audio: np.ndarray, frame_n: int) -> np.ndarray:
     """RMS per non-overlapping frame of `frame_n` samples (tail dropped)."""
     n = len(audio) // frame_n

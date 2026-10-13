@@ -50,6 +50,21 @@ class TestApplyTranslation(unittest.TestCase):
     def tearDown(self):
         self._td.cleanup()
 
+    def test_glossary_term_is_enforced(self):
+        # data/glossary.json: "float/levitate" must become «левит…», never «парить»
+        base = dict(BASE, segments=BASE["segments"] + [
+            {"id": 3, "start": 12.0, "end": 16.0, "speaker": "S0",
+             "text": "The law says you cannot float something."}])
+        (self.work / "segments.json").write_text(json.dumps(base, ensure_ascii=False))
+        r = run(self.work, {"3": "Закон говорит: парить нельзя."})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("TERM seg 3", r.stdout)
+        r = run(self.work, {"3": "Закон говорит, что левитация невозможна."})
+        self.assertNotIn("TERM seg 3", r.stdout)
+        # the avoid pattern is word-anchored: «Париж» is not «парить»
+        r = run(self.work, {"3": "В Париже левитация тоже невозможна."})
+        self.assertNotIn("TERM seg 3", r.stdout)
+
     def test_chunked_application_merges(self):
         r1 = run(self.work, {"0": "Раз."})
         self.assertEqual(r1.returncode, 0, r1.stderr)

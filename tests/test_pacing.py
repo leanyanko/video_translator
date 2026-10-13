@@ -45,12 +45,12 @@ class PlanClipTest(unittest.TestCase):
 
 
 class AllocatePiecesTest(unittest.TestCase):
-    def test_proportional_with_pad_and_floor(self):
+    def test_share_plus_pad_per_piece_with_floor(self):
+        # the pad is PER CALL: F5 paints silence around each piece
         secs = allocate_pieces(["а" * 30, "б" * 10, "Да."], 4.0)
-        budget = 4.0 + SILENCE_PAD
-        self.assertAlmostEqual(secs[0], budget * 30 / 43)
-        self.assertAlmostEqual(secs[1], budget * 10 / 43)
-        self.assertEqual(secs[2], PIECE_MIN_SECS)  # 0.3 s natural -> floor
+        self.assertAlmostEqual(secs[0], 4.0 * 30 / 43 + SILENCE_PAD)
+        self.assertAlmostEqual(secs[1], 4.0 * 10 / 43 + SILENCE_PAD)
+        self.assertAlmostEqual(secs[2], PIECE_MIN_SECS + SILENCE_PAD)  # 0.28 s -> floor
 
     def test_single_piece_gets_everything(self):
         self.assertEqual(allocate_pieces(["текст"], 2.5), [2.5 + SILENCE_PAD])

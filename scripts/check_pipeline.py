@@ -20,7 +20,9 @@ Checks, in pipeline order (multitrack checks are skipped in mix mode):
   refs       one wav+txt per speaker; 4-11.6 s; head silence <=0.3 s
   tts        every speech segment has a clip; manifest.json hash matches
              speaker|accents|ref (stale clip = old text with old voice)
-  orig       every type:"orig" file= exists
+  orig       every type:"orig" file= exists; no auto paste > 4 s; harvest's
+             speech check found no untranscribed speech (FAIL at >= 3
+             words, WARN below — harvest_report.json)
 Exit code 0 = all pass; 1 = failures (listed). --strict also fails on
 warnings. Run it before synthesis and before assembly — run_pipeline.py
 does this automatically.
@@ -293,11 +295,55 @@ if ru is not None and tts.exists():
                     "script (synthesize_f5.py writes one on its next run)")
 
 # ── orig files ──────────────────────────────────────────────────────
+PASTE_MAX_SECS = 4.0  # sec; laughs measured 0.7-3 s on exp_traps_v3/e1v6
+                      # harvest logs; the 12.2 s "laugh" of e1v6 was English
+                      # (TODO #13). One-run constant, s25.
+SPEECH_LOGPROB_MIN = -1.0  # whisper avg_logprob; traps 10-13: clear speech
+                           # -0.4..-0.9, noise it re-guessed every run
+                           # -1.75..-4.2. One-run constant, s25.
 if ru is not None:
     for s in ru:
         if s.get("type") == "orig" and "file" in s \
                 and not (work / s["file"]).exists():
             fail("orig", f"seg {s['id']}: {s['file']} missing")
+        if s.get("auto_track") and s["end"] - s["start"] > PASTE_MAX_SECS:
+            fail("orig", f"seg {s['id']}: auto paste {s['end'] - s['start']:.1f}s "
+                         f"at {s['start']:.1f}s — longer than any laugh, "
+                         "likely untranscribed speech (TODO #13)")
+    # harvest's speech check (TODO #13 belt b): candidates whisper heard
+    # words in were NOT pasted; each is a hole in the transcript —
+    # untranslated speech the dub replaces with silence
+    _hr = work / "harvest_report.json"
+    if _hr.exists():
+        rep = json.loads(_hr.read_text())
+        for l in rep.get("untranscribed_speech", []):
+            if l.get("bleed"):
+                warn("orig", f"paste candidate {l['start']:.1f}-{l['end']:.1f}s "
+                             f"{l['speaker'][-2:]} was another speaker's words "
+                             f"(bleed, not pasted): «{l['heard']}»")
+                continue
+            clear = l.get("logprob", 0.0) >= SPEECH_LOGPROB_MIN
+            msg = (f"untranscribed speech {l['start']:.1f}-{l['end']:.1f}s "
+                   f"{l['speaker'][-2:]} ({l['words']} words"
+                   + ("" if clear else ", unclear") + f"): «{l['heard']}» — "
+                   "add it to the transcript/translation, or accept")
+            (fail if l["words"] >= 3 and clear else warn)("orig", msg)
+        for l in rep.get("pasted_with_words", []):
+            warn("orig", f"paste {l['start']:.1f}-{l['end']:.1f}s "
+                         f"{l['speaker']} is a laugh carrying a word "
+                         f"(PANNs {l.get('panns_laugh', 0):.2f}): «{l['heard']}» "
+                         "— it plays in the original language")
+        if not rep.get("speech_checked", True):
+            warn("orig", "harvest ran with --skip-speech-check: pastes may "
+                         "contain untranscribed speech")
+        checked = set(rep.get("speakers_checked") or [])
+        pasted = {s["speaker"] for s in ru if s.get("auto_track")}
+        if checked and pasted - checked:
+            warn("orig", f"pastes of {sorted(pasted - checked)} were not "
+                         "speech-checked (harvest ran with --speakers)")
+    elif any(s.get("auto_track") for s in ru):
+        warn("orig", "auto pastes present but no harvest_report.json — "
+                     "re-run harvest_laughs.py so pastes are speech-checked")
 
 # ── verdict ─────────────────────────────────────────────────────────
 for a in accepts:

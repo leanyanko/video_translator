@@ -40,6 +40,30 @@ if forbidden_path.exists():
 base = json.loads((work / "segments.json").read_text())
 base_ids = {str(s["id"]) for s in base["segments"]}
 
+# terminology (data/glossary.json): an English term the translation must
+# render with a given Russian stem — and never with another. A term
+# decision taken by ear ("левитация", not "парить") lives there, not
+# only in RU_INSTRUCTIONS prose, so the check runs on every chunk and
+# the in-pipeline translator (tracker d2) can read it
+import re  # noqa: E402
+
+glossary_path = Path(__file__).resolve().parent.parent / "data" / "glossary.json"
+if glossary_path.exists():
+    glossary = json.loads(glossary_path.read_text())
+    glossary.pop("_comment", None)
+    en_text = {str(s["id"]): s.get("text", "") for s in base["segments"]}
+    for sid, text in translations.items():
+        for pat, rule in glossary.items():
+            if not re.search(pat, en_text.get(sid, ""), re.I):
+                continue
+            low = text.lower()
+            if rule.get("ru") and rule["ru"] not in low:
+                print(f"TERM seg {sid}: English has /{pat}/ but the Russian "
+                      f"lacks «{rule['ru']}…» — {rule.get('why', '')}")
+            elif rule.get("avoid") and re.search(rule["avoid"], low):
+                print(f"TERM seg {sid}: «{rule['avoid']}» is not the term — "
+                      f"{rule.get('why', '')}")
+
 unknown = set(translations) - base_ids
 if unknown:
     sys.exit(f"ERROR: translation ids not in segments.json: {sorted(unknown)[:10]}")

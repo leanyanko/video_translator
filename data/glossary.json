@@ -1,0 +1,13 @@
+{
+ "_comment": "Terminology the translation must keep (RU_INSTRUCTIONS §4). Key: regex over the ENGLISH segment text (case-insensitive). ru: stem that must appear in the Russian; avoid: regex that must not match (anchor it on word boundaries — «пар+?и» alone hits «Париж», «парикмахер»). apply_translation.py warns per segment; when translation moves into the pipeline (tracker d2) both go into the prompt. Add an entry for every term decision taken by ear.",
+ "levitat|\\bfloat(?!ing[- ]point)": {
+  "ru": "левит",
+  "avoid": "\\bпар+?(и(ть|т|л|шь|м|те|вш)|ящ|я\\b)",
+  "why": "научный термин — «левитация», не «парить» (лирика; к тому же омограф па́рить/пари́ть), решение 10-13"
+ },
+ "nobel": {
+  "ru": "нобел",
+  "avoid": "\\bнобелевск",
+  "why": "F5 читает «нобеле́вский» — писать «комитет Нобеля», «премия Нобеля» (см. forbidden_words.json)"
+ }
+}

@@ -32,12 +32,17 @@ lines by the speaker's REFERENCE tempo instead; it lost lip sync (Dan
 20–30 % shorter than his lips), kept Misha slow (his reference is
 slow) and swallowed words. The result goes to F5 as an exact duration
 (fix_duration = processed_ref_sec + wanted + SILENCE_PAD), which also
-bypasses the 10-byte rule. SILENCE_PAD is F5's own habit, measured on
-the traps clip: it leaves ~0.3–0.9 s of silence inside any clip and
-crams the words into the rest, so without the pad short lines come out
-swallowed. A small per-piece floor keeps «Да.» from being clipped.
-Clip length then matches the plan to within trim error — no
-measure-and-resynthesize loop is needed.
+bypasses the 10-byte rule. F5 paints ~0.5 s of silence around EVERY
+call (lead and tail, imitating the reference's air) and crams the
+words into the rest; a line is sung in sentence-sized pieces, one call
+each, so the waste is per piece, not per line — a 3-piece line lost
+~1 s of speaking time and swallowed its last word (traps 2:36). So
+each piece gets SILENCE_PAD on top of its share, synthesize_f5 trims
+each piece's own silence away (audio_utils.speech_bounds, the rule
+assemble trims by) and joins the pieces with a short natural gap; the
+speech then lasts the plan to within trim error — no
+measure-and-resynthesize loop is needed. A small per-piece floor
+keeps «Да.» from being clipped.
 """
 import re
 
@@ -45,10 +50,12 @@ PACE_MIN = 9.0        # chars/s; slower than this is a drawl, the line is shorte
 PACE_MAX = 15.0       # chars/s; faster than this swallows words, the line overruns
 MAX_SQUEEZE = 1.3     # how far past PACE_MAX a line may go to fit its slot
 SLOT_FILL = 0.95      # share of the slot a line may occupy
-SILENCE_PAD = 0.4     # sec of silence F5 paints inside a clip (median 0.45 on traps)
-PIECE_MIN_SECS = 0.6  # a 3-letter piece is ~0.25 s of speech and comes out
-                      # clipped; F5's own answer was speed 0.3
-PACE_VERSION = "pace3"  # manifest salt: clips sung under older pacing are stale
+SILENCE_PAD = 0.5     # sec of lead+tail silence F5 paints per call (0.46-0.67
+                      # on single-piece traps clips); trimmed away after
+PIECE_MIN_SECS = 0.4  # speech floor per piece: a 3-letter piece at tempo is
+                      # ~0.25 s and comes out clipped; F5's own answer was speed 0.3
+PIECE_GAP = 0.15      # sec of air between pieces (they split at sentence ends)
+PACE_VERSION = "pace4"  # manifest salt: clips sung under older pacing are stale
 
 
 def pace_chars(text: str) -> int:
@@ -75,10 +82,12 @@ def plan_clip(chars: int, span_secs: float, slot_secs: float) -> tuple:
 
 
 def allocate_pieces(pieces: list, wanted: float) -> list:
-    """Seconds of F5 output per piece: `wanted` plus SILENCE_PAD, split
-    in proportion to pace_chars, each at least PIECE_MIN_SECS (so the
-    total may exceed the plan for tiny pieces)."""
+    """Seconds of F5 output to ask for per piece: the piece's share of
+    `wanted` (by pace_chars, at least PIECE_MIN_SECS of speech) plus
+    SILENCE_PAD for the silence F5 paints around each call. The caller
+    trims that silence off again, so the speech that remains ≈ the
+    share."""
     weights = [pace_chars(p) for p in pieces]
     total = sum(weights) or 1
-    budget = wanted + SILENCE_PAD
-    return [max(budget * w / total, PIECE_MIN_SECS) for w in weights]
+    return [max(wanted * w / total, PIECE_MIN_SECS) + SILENCE_PAD
+            for w in weights]

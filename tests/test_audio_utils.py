@@ -9,7 +9,48 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from audio_utils import (RMS_SILENCE, audition, decode, frame_rms,  # noqa: E402
-                         merge_regions, probe_duration, scan_voiced_regions)
+                         join_trimmed, merge_regions, probe_duration,
+                         scan_voiced_regions, speech_bounds)
+
+
+class SpeechBoundsTest(unittest.TestCase):
+    """The trim rule synthesize_f5 applies per piece (pacing): F5's
+    painted lead/tail silence must go, 50 ms of air stays."""
+
+    def test_lead_and_tail_silence_are_cut(self):
+        sr = 24000
+        tone = 0.3 * np.sin(np.linspace(0, 2 * np.pi * 220 * 1.0, sr))
+        clip = np.concatenate([np.zeros(sr // 2), tone, np.zeros(sr)]).astype(np.float32)
+        lo, hi = speech_bounds(clip, sr)
+        self.assertAlmostEqual(lo / sr, 0.5 - 0.05, delta=0.03)
+        self.assertAlmostEqual(hi / sr, 1.5 + 0.05, delta=0.03)
+
+    def test_quiet_breath_below_relative_threshold_is_not_onset(self):
+        sr = 24000
+        breath = 0.012 * np.sin(np.linspace(0, 2 * np.pi * 220 * 0.5, sr // 2))
+        tone = 0.5 * np.sin(np.linspace(0, 2 * np.pi * 220 * 1.0, sr))
+        clip = np.concatenate([breath, tone]).astype(np.float32)
+        lo, _ = speech_bounds(clip, sr)
+        self.assertGreater(lo / sr, 0.4)  # starts at the tone, not the breath
+
+    def test_all_silent(self):
+        self.assertIsNone(speech_bounds(np.zeros(24000, dtype=np.float32), 24000))
+
+    def test_join_trimmed_keeps_speech_plus_gaps(self):
+        # the invariant pacing rests on: pieces' painted silence goes,
+        # the speech that remains = sum of pieces + the gaps between them
+        sr = 24000
+        def piece(speech_secs, lead=0.5, tail=0.6):
+            tone = 0.3 * np.sin(np.linspace(0, 2 * np.pi * 220 * speech_secs,
+                                            int(speech_secs * sr)))
+            return np.concatenate([np.zeros(int(lead * sr)), tone,
+                                   np.zeros(int(tail * sr))]).astype(np.float32)
+        out = join_trimmed([piece(2.0), piece(1.0), piece(0.5)], sr, 0.15)
+        expected = 2.0 + 1.0 + 0.5 + 2 * 0.15 + 3 * 2 * 0.05  # + 50 ms air per edge
+        self.assertAlmostEqual(len(out) / sr, expected, delta=0.06)
+
+    def test_join_trimmed_empty(self):
+        self.assertEqual(len(join_trimmed([], 24000, 0.15)), 0)
 
 
 class TestWithFixture(unittest.TestCase):

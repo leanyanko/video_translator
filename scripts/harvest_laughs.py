@@ -33,11 +33,21 @@ Keep/drop chain per speaker:
      stays small. Measured anchors (work/exp_traps_v3): Misha's laugh
      own 0.054 vs Dan 0.2 → ratio ~4, kept; Dan-bleed on Misha's stem
      own 0.017 vs Dan 0.3 → ratio ~18, dropped;
-  4. the rest is cut to laughs/<spk>_<t>.wav and appended to
+  4. speech check (TODO #13 belt b): whisper on the candidate itself.
+     The invariant assumes the transcript is complete; when whisper
+     skipped a phrase, the hole arrives here as "non-speech" and every
+     gate passes honestly — the laugh signature cannot tell speech from
+     laughter (speech pulses at syllable rate: 5 of 6 pastes in the
+     traps clip were English). A candidate whose back-transcription
+     holds real words is NOT pasted and goes to harvest_report.json as
+     untranscribed speech; the doctor FAILs on it (a translation gap)
+     — silence there is still a loss, just a quieter one;
+  5. the rest is cut to laughs/<spk>_<t>.wav and appended to
      segments_ru.json as {"type": "orig", "auto_track": true, id 9500+}
      — re-runs replace only their own entries, manual ones survive.
 """
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -129,6 +139,63 @@ def is_laugh(dur_secs: float, bursts: int, panns_laugh_score: float) -> bool:
     return acoustic or labeled
 
 
+# ── speech check ──────────────────────────────────────────────────────
+# Tokens whisper writes for vocalizations that are NOT speech: laughter
+# and breathy/humming backchannel. Anything else — including «yeah»,
+# «okay», «no» — is a word, and an English word in the dub is a leak.
+# (Fourth such set in the repo — segment_tracks.NONVERBAL,
+# whisper_guard.FILLER_LOOP, repeat_audit.FILLER; unify under s24.)
+NONVERBAL = {"mm", "mmm", "hmm", "hm", "mhm", "mmhmm", "uh", "um", "uhhuh",
+             "oh", "ooh", "ah", "aah", "huh", "heh", "hah", "ha", "ho",
+             "wow", "whoa", "ugh", "hmph", "phew", "shh"}
+WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"  # same as transcribe_*
+SPEECH_FAIL_WORDS = 3   # a phrase worth translating -> doctor FAIL; fewer -> WARN
+
+
+def speech_words(text: str) -> list:
+    """Real words in a back-transcription — laughter/hum tokens removed."""
+    out = []
+    for tok in re.sub(r"[^\w' ]+", " ", text.lower()).split():
+        t = tok.replace("'", "")
+        if t in NONVERBAL or re.fullmatch(r"(ha|he|ah|ho|hee|hah)+h?", t):
+            continue
+        out.append(tok)
+    return out
+
+
+LAUGH_WORDS_MAX = 2  # a laugh may carry a word or two («yeah», «oh no»)
+
+
+def is_speech_leak(words: list, panns_laugh: float) -> bool:
+    """Should this candidate be refused as speech? Any real words — unless
+    it is a short exclamation INSIDE something PANNs hears as laughter:
+    Misha's snicker at the Nobel-committee joke (traps 101.9 s, Snicker
+    0.27) came back from whisper as «Yeah.» and was lost on the first
+    pass. Three or more words are a phrase whatever PANNs says."""
+    if not words:
+        return False
+    return len(words) > LAUGH_WORDS_MAX or panns_laugh < LAUGH_PANNS_THR
+
+
+def is_bleed(heard: list, others: list, share: float = 0.5) -> bool:
+    """Are the words heard in this mic the words ANOTHER speaker was
+    transcribed saying at that moment? Then it is his voice bleeding
+    in, not a hole in the transcript. Time overlap alone cannot tell:
+    two people talking at once is normal, so the test is on the words
+    — at least `share` of the heard tokens must appear in the other
+    speakers' words (traps clip: «Did you do the same with the YPCR?»
+    on Dan's mic vs Misha's «...with the YBCO superconductor?»)."""
+    norm = lambda w: re.sub(r"[^\w]+", "", w.lower())  # noqa: E731
+    # function words match anyone («and», «is», «the»): judge on content
+    # words when there are any
+    content = [t for t in map(norm, heard) if len(t) >= 4] or list(map(norm, heard))
+    if not content:
+        return False
+    pool = {norm(w) for w in others}
+    hits = sum(t in pool for t in content)
+    return hits >= share * len(content)
+
+
 def main() -> None:
     work = Path(sys.argv[1])
     dry_run = flag("--dry-run")
@@ -137,7 +204,10 @@ def main() -> None:
         sys.exit("--restore-sounds must be laughs|all|none")
     if mode == "none":
         # disabled is not "leave stale pastes": entries from an earlier
-        # laughs/all run must be stripped (review 10-10 #3)
+        # laughs/all run must be stripped (review 10-10 #3) — and so must
+        # the speech-check report of that run, or the doctor keeps
+        # failing on leaks that are no longer pasted
+        (work / "harvest_report.json").unlink(missing_ok=True)
         ru_path = work / "segments_ru.json"
         ru = json.loads(ru_path.read_text())
         before = len(ru["segments"])
@@ -235,6 +305,91 @@ def main() -> None:
                 f["score"] = round(float(scores[best]), 3)
             f["_panns_laugh"] = max(float(scores[i]) for i in want
                                     if names[i] in LAUGH_FAMILY)
+
+    # speech check (chain step 4): back-transcribe EVERY surviving
+    # candidate, before the laughs filter — deliberately: a hole in the
+    # transcript is worth reporting even when the sound would not have
+    # been pasted. A full episode means a few hundred short whisper
+    # calls (minutes); do not "optimize" the filter in front of it.
+    leaks, pasted_with_words = [], []
+    if found and not flag("--skip-speech-check"):
+        import mlx_whisper  # lazy: only when there is something to check
+        lang = None
+        wt = work / "words_tracks.json"
+        if wt.exists():
+            lang = json.loads(wt.read_text()).get("language")
+        # other speakers' words come from the FILTERED segments: the raw
+        # per-track words still carry cross-mic echo (Dan's sentence
+        # transcribed on Mike's stem), which would make Dan's own
+        # untranscribed speech look like "someone else's words"
+        sp = work / "segments.json"
+        said = json.loads(sp.read_text())["segments"] if sp.exists() else []
+        kept = []
+        for f in found:
+            seg16 = audios[f["speaker"]][int(f["start"] * SCAN_SR):
+                                         int(f["end"] * SCAN_SR)]
+            r = mlx_whisper.transcribe(
+                np.asarray(seg16, dtype=np.float32),
+                path_or_hf_repo=WHISPER_MODEL,
+                **({"language": lang} if lang else {}))
+            heard = r["text"].strip()
+            words = speech_words(heard)
+            if not is_speech_leak(words, f.get("_panns_laugh", 0.0)):
+                kept.append(f)
+                if words:
+                    # a laugh with a word in it goes into the dub as-is:
+                    # on record, so a listener can find out why
+                    pasted_with_words.append(
+                        {**f, "heard": heard, "words": len(words),
+                         "panns_laugh": round(f.get("_panns_laugh", 0.0), 2)})
+                continue
+            # whisper's own confidence: on noise/bleed it hallucinates a
+            # different phrase every run («Perché chills», «It's an
+            # action man») at a low avg_logprob — the doctor treats
+            # those as unclear (WARN), confident words as a FAIL
+            segs_w = r.get("segments") or []
+            logprob = (sum(s.get("avg_logprob", 0.0) for s in segs_w)
+                       / len(segs_w)) if segs_w else 0.0
+            # the same words ANOTHER speaker was transcribed saying just
+            # then = his voice in this mic (bleed the anti-bleed ratio
+            # let through), not a hole in the transcript
+            others = [t for s in said
+                      if s.get("speaker") != f["speaker"]
+                      and s["end"] > f["start"] - 0.5
+                      and s["start"] < f["end"] + 0.5
+                      for t in s.get("text", "").split()]
+            bleed = is_bleed(words, others)
+            leaks.append({**f, "heard": heard, "words": len(words),
+                          "bleed": bleed, "logprob": round(logprob, 2)})
+            print(f"  SPEECH {f['speaker'][-2:]} {f['start']:7.1f}-"
+                  f"{f['end']:7.1f} NOT pasted — "
+                  + ("another speaker's words (bleed)" if bleed else
+                     f"untranscribed speech ({len(words)} words, "
+                     f"logprob {logprob:.2f})")
+                  + f": «{heard}»", flush=True)
+        print(f"speech check: {len(found)} whisper calls, {len(leaks)} "
+              f"candidates are speech whisper missed, {len(pasted_with_words)} "
+              "laughs carry a word (see harvest_report.json)", flush=True)
+        found = kept
+    if not dry_run:
+        # always written (even empty): the doctor distinguishes "checked,
+        # nothing found" from "never checked". A --speakers run merges
+        # into the previous report — the other speakers' findings stay
+        checked = set(only_spk or speakers)
+        rep_path = work / "harvest_report.json"
+        rep = {"untranscribed_speech": [], "pasted_with_words": [],
+               "speakers_checked": []}
+        if only_spk and rep_path.exists():
+            old = json.loads(rep_path.read_text())
+            for key in ("untranscribed_speech", "pasted_with_words"):
+                rep[key] = [x for x in old.get(key, [])
+                            if x.get("speaker") not in checked]
+            rep["speakers_checked"] = old.get("speakers_checked", [])
+        rep["untranscribed_speech"] += leaks
+        rep["pasted_with_words"] += pasted_with_words
+        rep["speech_checked"] = not flag("--skip-speech-check")
+        rep["speakers_checked"] = sorted(set(rep["speakers_checked"]) | checked)
+        rep_path.write_text(json.dumps(rep, ensure_ascii=False, indent=1))
 
     if mode == "laughs":
         kept = []

@@ -190,7 +190,9 @@ import soundfile as sf
 # is used, not the file's. tts_f5/pace.json records the plan per clip
 # for the doctor and for re-measuring what atempo is left downstream.
 from f5_tts.infer.utils_infer import preprocess_ref_audio_text  # noqa: E402
-from pacing import allocate_pieces, pace_chars, plan_clip  # noqa: E402
+from audio_utils import join_trimmed  # noqa: E402
+from pacing import (PIECE_GAP, allocate_pieces, pace_chars,  # noqa: E402
+                    plan_clip)
 
 _quiet = lambda *a, **k: None  # noqa: E731
 ref_text_cache = {}
@@ -239,15 +241,17 @@ for n, seg in enumerate(todo, 1):
             seed=SEED,
         )
         waves.append(np.asarray(wav))
-    sf.write(
-        outdir / f"seg_{seg['id']:04d}.wav", np.concatenate(waves), sr_out
-    )
+    # F5 paints lead/tail silence around every call; each piece is
+    # trimmed (the rule assemble trims by) and rejoined with a short
+    # gap so pieces do not stack pauses and the speech keeps its plan
+    out_wav = join_trimmed(waves, sr_out, PIECE_GAP)
+    sf.write(outdir / f"seg_{seg['id']:04d}.wav", out_wav, sr_out)
     manifest[str(seg["id"])] = seg_hash(seg)
     manifest_path.write_text(json.dumps(manifest, indent=1))
     pace_log[str(seg["id"])] = {
         "chars": chars, "span": round(span, 2), "wanted": round(wanted, 2),
         "slot": round(slots[seg["id"]], 2), "rate": round(rate, 1),
-        "pieces": len(pieces)}
+        "pieces": len(pieces), "speech": round(len(out_wav) / sr_out, 2)}
     pace_path.write_text(json.dumps(pace_log, indent=1))
     per_seg = (time.time() - t_start) / n
     print(f"[{n}/{len(todo)}] seg {seg['id']:04d} {spk} {chars} chars, "
@@ -255,4 +259,12 @@ for n, seg in enumerate(todo, 1):
           f"{slots[seg['id']]:.1f}s slot ({time.time()-t0:.1f}s, "
           f"avg {per_seg:.1f}s/seg)", flush=True)
 
+# pre-flight number in the log (CLAUDE.md §2): speech / original span,
+# before assemble's atempo — target 0.95-1.10
+_ratios = sorted(pace_log[str(s["id"])]["speech"] / pace_log[str(s["id"])]["span"]
+                 for s in todo if pace_log.get(str(s["id"]), {}).get("span", 0) > 0.3)
+if _ratios:
+    print(f"speech/span over {len(_ratios)} clips: median "
+          f"{_ratios[len(_ratios) // 2]:.2f}, min {_ratios[0]:.2f}, "
+          f"max {_ratios[-1]:.2f} (target 0.95-1.10)")
 print("done")

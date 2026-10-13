@@ -9,7 +9,57 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from harvest_laughs import bleed_dropped, subtract_speech  # noqa: E402
+from harvest_laughs import (bleed_dropped, is_bleed, is_speech_leak,  # noqa: E402
+                            speech_words, subtract_speech)
+
+
+class IsSpeechLeakTest(unittest.TestCase):
+    def test_laugh_with_a_word_in_it_is_still_a_laugh(self):
+        # Misha's snicker at the Nobel joke: whisper «Yeah.», PANNs 0.27
+        self.assertFalse(is_speech_leak(["yeah"], 0.27))
+
+    def test_a_word_without_laughter_is_speech(self):
+        self.assertTrue(is_speech_leak(["yeah"], 0.0))
+
+    def test_a_phrase_is_speech_whatever_panns_says(self):
+        self.assertTrue(is_speech_leak("and superconducting is nice".split(), 0.9))
+
+    def test_no_words_is_never_a_leak(self):
+        self.assertFalse(is_speech_leak([], 0.0))
+
+
+class IsBleedTest(unittest.TestCase):
+    def test_other_speakers_words_in_this_mic(self):
+        heard = speech_words("Did you do the same with the YPCR?")
+        misha = "Did you do the same with the YBCO superconductor?".split()
+        self.assertTrue(is_bleed(heard, misha))
+
+    def test_own_words_over_someone_else_talking(self):
+        # «and», «is» match anyone — content words decide
+        heard = speech_words("And superconducting is nice.")
+        misha = "And the superconductor is essentially a diamagnet".split()
+        self.assertFalse(is_bleed(heard, misha))
+
+    def test_nobody_else_talking(self):
+        self.assertFalse(is_bleed(["yeah"], []))
+
+
+class SpeechWordsTest(unittest.TestCase):
+    """TODO #13 belt b: the speech check must pass laughter and hums
+    and stop anything with a real word — the five traps-clip leaks."""
+
+    def test_laughter_and_backchannel_are_not_speech(self):
+        self.assertEqual(speech_words("Ha ha ha ha ha ha."), [])
+        self.assertEqual(speech_words("Hahaha, hmm. Mm-hmm."), [])
+        self.assertEqual(speech_words(""), [])
+
+    def test_real_words_are_speech(self):
+        self.assertEqual(len(speech_words("And superconducting is nice.")), 4)
+        self.assertEqual(speech_words("to float, I see."), ["to", "float", "i", "see"])
+        self.assertEqual(speech_words("Yeah."), ["yeah"])  # an English word leaks too
+
+    def test_mixed_laugh_and_word(self):
+        self.assertEqual(speech_words("Ha ha, right."), ["right"])
 
 
 class SubtractSpeechTest(unittest.TestCase):
