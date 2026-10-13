@@ -20,7 +20,7 @@ from cli_args import flag, opt
 
 from pydub import AudioSegment
 
-from audio_utils import probe_duration
+from audio_utils import probe_duration, speech_bounds
 
 MAX_TEMPO = 1.35  # max speed-up before we allow overflow instead
 SR = 44100
@@ -88,21 +88,14 @@ def trim_silence(path: Path, out_path: Path) -> Path | None:
     data, sr = sf_.read(path, dtype="float32")
     if data.ndim > 1:
         data = data.mean(axis=1)
-    # threshold relative to the clip's own loudness: F5 also paints
-    # quiet lead/tail mumble and breaths ABOVE the absolute floor, which
-    # then delays the line by their length (qc_tts.py's LEAD flag). RMS
-    # over 20 ms frames, not raw samples — a single click must not count
-    # as speech onset.
-    n = len(data) // (sr // 50)
-    frame = sr // 50
-    rms = np.sqrt((data[: n * frame].reshape(n, frame) ** 2).mean(axis=1))
-    thr = max(TRIM_THRESHOLD, 0.1 * float(np.percentile(rms, 99)))
-    voiced_f = np.where(rms > thr)[0]
-    if len(voiced_f) == 0:
+    # one rule with synthesize_f5's per-piece trim (audio_utils.
+    # speech_bounds): threshold relative to the clip's own loudness so
+    # painted lead breath does not delay the line (qc_tts LEAD), then the
+    # bounds follow the decay so unvoiced word endings survive
+    b = speech_bounds(data, sr, floor=TRIM_THRESHOLD, margin=TRIM_MARGIN)
+    if b is None:
         return None
-    lo = max(0, voiced_f[0] * frame - int(TRIM_MARGIN * sr))
-    hi = min(len(data), (voiced_f[-1] + 1) * frame + int(TRIM_MARGIN * sr))
-    sf_.write(out_path, data[lo:hi], sr)
+    sf_.write(out_path, data[b[0]: b[1]], sr)
     return out_path
 
 

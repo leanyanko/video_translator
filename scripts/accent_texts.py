@@ -50,15 +50,19 @@ def reapply_translator_marks(marked_src: str, accented: str) -> str:
     text_ru overrides whatever RUAccent chose for that word."""
     import re
 
+    # keys are ё-normalized on both sides: RUAccent ёfies as it marks
+    # («самое» → «само+ё», «еще» → «ещё»), which used to make the word
+    # miss its override and silently drop the translator's mark (s6)
+    key = lambda w: w.replace("+", "").replace("ё", "е").replace("Ё", "Е").lower()  # noqa: E731
     overrides = {}
     for token in marked_src.split():
         core = token.strip(".,!?…;:—()«»\"'")
         if "+" in core:
-            overrides[core.replace("+", "").lower()] = core
+            overrides[key(core)] = core
     if not overrides:
         return accented
     def sub(m):
-        return overrides.get(m.group(0).replace("+", "").lower(), m.group(0))
+        return overrides.get(key(m.group(0)), m.group(0))
     return re.sub(r"[\w+ёЁ-]+", sub, accented)
 
 

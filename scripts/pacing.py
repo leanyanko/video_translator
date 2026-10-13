@@ -47,15 +47,20 @@ keeps «Да.» from being clipped.
 import re
 
 PACE_MIN = 9.0        # chars/s; slower than this is a drawl, the line is shortened
-PACE_MAX = 15.0       # chars/s; faster than this swallows words, the line overruns
+PACE_MAX = 13.0       # chars/s; faster than this swallows words, the line overruns.
+                      # The SAME number is the translator's budget
+                      # (apply_translation, check_pipeline import it): if the
+                      # translation is budgeted at 13 ch/s, F5 must sing 13.
+                      # 15 was tried (traps v7-v9): endings swallowed by ear.
 MAX_SQUEEZE = 1.3     # how far past PACE_MAX a line may go to fit its slot
 SLOT_FILL = 0.95      # share of the slot a line may occupy
 SILENCE_PAD = 0.5     # sec of lead+tail silence F5 paints per call (0.46-0.67
                       # on single-piece traps clips); trimmed away after
 PIECE_MIN_SECS = 0.4  # speech floor per piece: a 3-letter piece at tempo is
                       # ~0.25 s and comes out clipped; F5's own answer was speed 0.3
-PIECE_GAP = 0.15      # sec of air between pieces (they split at sentence ends)
-PACE_VERSION = "pace4"  # manifest salt: clips sung under older pacing are stale
+PIECE_GAP = 0.35      # sec of air between pieces (sentence ends): 0.15 made
+                      # the last syllable sound clipped by ear (traps 1:07, 10-13)
+PACE_VERSION = "pace6"  # manifest salt: clips sung under older pacing are stale
 
 
 def pace_chars(text: str) -> int:

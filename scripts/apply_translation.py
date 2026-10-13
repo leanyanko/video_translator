@@ -95,7 +95,7 @@ segments = sorted(segments + extra, key=lambda s: s["start"])
 # timing budget: the Russian must FILL the original speech (≈13 chars per
 # second of end−start), not just fit under it — a squeezed line ends while
 # the speaker's mouth still moves. Short lines (<1.5 s) are exempt.
-CPS = 13.0
+from pacing import PACE_MAX as CPS  # noqa: E402  one tempo for translator and F5 (s23)
 for seg in segments:
     sid = str(seg["id"])
     if sid not in translations or seg.get("type") == "orig":

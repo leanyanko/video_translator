@@ -33,11 +33,14 @@ class PlanClipTest(unittest.TestCase):
         self.assertAlmostEqual(rate, PACE_MIN)
 
     def test_squeezed_to_the_slot_but_capped(self):
-        # 150 chars, original 5 s, slot 9 s: 10 s at PACE_MAX does not
-        # fit 8.55 s -> 8.55 s (rate 17.5, within PACE_MAX * MAX_SQUEEZE)
-        wanted, rate = plan_clip(150, 5.0, 9.0)
-        self.assertAlmostEqual(wanted, 8.55)
-        self.assertAlmostEqual(rate, 150 / 8.55)
+        # 150 chars, original 5 s: at PACE_MAX the line needs 150/PACE_MAX;
+        # a slot whose 95 % is a bit shorter squeezes it to that budget
+        # (still under PACE_MAX * MAX_SQUEEZE)
+        slot = (150 / PACE_MAX) * 0.9 / 0.95
+        wanted, rate = plan_clip(150, 5.0, slot)
+        self.assertAlmostEqual(wanted, slot * 0.95)
+        self.assertAlmostEqual(rate, 150 / (slot * 0.95))
+        self.assertLess(rate, PACE_MAX * MAX_SQUEEZE)
         # slot 3 s: the cap binds, the line overruns
         wanted, rate = plan_clip(150, 5.0, 3.0)
         self.assertAlmostEqual(wanted, 150 / PACE_MAX / MAX_SQUEEZE)

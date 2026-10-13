@@ -76,6 +76,7 @@ def warn(stage, msg):
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stress_rules import force_name_stress  # noqa: E402
+from pacing import PACE_MAX  # noqa: E402  the translator's chars/s budget (s23)
 from manifest_bridge import (  # noqa: E402
     load_or_bridge, missing_clips, ref_hasher, seg_hash, stale_ids, voiced)
 
@@ -187,9 +188,9 @@ if (work / "segments_ru.json").exists():
             continue
         dur = s["end"] - s["start"]
         n = len(s["text_ru"].replace("+", ""))
-        if dur >= 1.5 and n > 1.3 * 13 * dur + 10:
+        if dur >= 1.5 and n > 1.3 * PACE_MAX * dur + 10:
             warn("translate", f"seg {s['id']}: {n} chars vs budget "
-                              f"{13 * dur:.0f} ({n / (13 * dur):.0%})")
+                              f"{PACE_MAX * dur:.0f} ({n / (PACE_MAX * dur):.0%})")
 else:
     fail("translate", "segments_ru.json missing")
 
@@ -316,7 +317,15 @@ if ru is not None:
     _hr = work / "harvest_report.json"
     if _hr.exists():
         rep = json.loads(_hr.read_text())
+        def _covered(l):
+            # the report is a snapshot: a hole that has since been added
+            # to the transcript (hand segment) is resolved, not a failure
+            return any(s.get("speaker") == l["speaker"] and s.get("type") != "orig"
+                       and min(s["end"], l["end"]) - max(s["start"], l["start"])
+                       >= 0.5 * (l["end"] - l["start"]) for s in ru)
         for l in rep.get("untranscribed_speech", []):
+            if _covered(l):
+                continue
             if l.get("bleed"):
                 warn("orig", f"paste candidate {l['start']:.1f}-{l['end']:.1f}s "
                              f"{l['speaker'][-2:]} was another speaker's words "

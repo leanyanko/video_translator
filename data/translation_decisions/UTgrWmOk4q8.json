@@ -1,0 +1,39 @@
+{
+ "_comment": "Per-VIDEO translation decisions (Gelbart episode UTgrWmOk4q8; baseline_traps and baseline20 are cut from it). Keyed by the ENGLISH segment text as transcribed (match after lowercasing and stripping punctuation), not by segment id — ids drift when re-segmenting (tracker d1). ru = the translation to use; transcript_fix = the English Whisper should have produced (when the source transcript was wrong); why/date = the decision on record. Mechanism to apply these automatically is TODO.md #18; until then the translator reads this file before translating a run of this video, and apply_translation warns on a mismatch.",
+ "decisions": [
+  {
+   "en": "You know, Ernst Scholl's law says you cannot float something, but they just showed you three ways to do it. Okay, and that's it.",
+   "ru": "Теорема Ирншоу говорит, что левитация невозможна, — а вам только что показали три способа её получить. Так, и всё.",
+   "why": "«левитация» — научный термин (глоссарий), «парить нельзя» — лирика; формулировка v1–v4, выбрана Анной на слух",
+   "date": "2026-10-13"
+  },
+  {
+   "en": "Did you do the same with the YBCO superconductor?",
+   "ru": "А с высокотемпературным сверхпроводником вы тоже пробовали?",
+   "why": "F5 голосом Миши не выговаривает «иттрий-бариевым» и комкает «самое» (QC 0.59–0.67); YBCO раскрыт как высокотемпературный сверхпроводник",
+   "date": "2026-10-13"
+  },
+  {
+   "en": "Loading, yeah.",
+   "transcript_fix": "Floating, yeah.",
+   "ru": "Левитирует, да.",
+   "why": "Whisper слышит «Loading» (prob 0.65) — Миша повторяет слово Дэна «floating»; с v1 по v9 звучало «Грузится, да»",
+   "date": "2026-10-13"
+  },
+  {
+   "en": "And superconducting is nice.",
+   "ru": "А сверхпроводник — это красиво.",
+   "speaker": "SPEAKER_00",
+   "span": [126.3, 128.2],
+   "why": "Whisper пропустил фразу целиком (TODO #13); найдена проверкой речи harvest, добавлена ручным сегментом (overlap поверх Миши)",
+   "date": "2026-10-13"
+  },
+  {
+   "en_pattern": "Ernst Scholl's law",
+   "transcript_fix": "Earnshaw's theorem",
+   "ru": "теорема Ирншоу",
+   "why": "Whisper стабильно слышит фамилию Earnshaw как «Ernst Scholl»; русская традиция — теорема Ирншоу",
+   "date": "2026-10-13"
+  }
+ ]
+}

@@ -56,23 +56,45 @@ def decode(path, sr: int = SCAN_SR, start: float | None = None,
 
 
 def speech_bounds(data: np.ndarray, sr: int, floor: float = 0.01,
-                  rel: float = 0.1, margin: float = 0.05):
+                  rel: float = 0.1, margin: float = 0.05,
+                  decay_rel: float = 0.01, tail_max: float = 0.35,
+                  head_rel: float = 0.05, head_max: float = 0.1,
+                  tail_margin: float | None = None):
     """(lo, hi) sample bounds of the speech inside a TTS clip, or None
-    when it is all silence. The rule assemble.trim_silence uses: RMS
-    over 20 ms frames, threshold = max(floor, rel × the clip's own 99th
-    percentile) so quiet painted lead/tail breath does not count as
-    onset; `margin` seconds of air kept on both sides."""
+    when it is all silence. Shared by synthesize_f5 (per piece) and
+    assemble (per clip). Two thresholds: speech is FOUND where RMS over
+    20 ms frames exceeds max(floor, rel × the clip's own 99th
+    percentile) — quiet painted lead/tail breath does not count as
+    onset; then the bounds are EXTENDED outward while the signal is
+    still decaying: the tail while above decay_rel × p99 (−40 dB, at
+    most tail_max), the head while above head_rel × p99 (−26 dB, at
+    most head_max — stricter, so a painted breath still does not delay
+    the line). Unvoiced word endings («-ть», «-с») sit 20–30 dB under
+    the vowels and last longer than `margin` — the single-threshold cut
+    clipped them at −30…−15 dB on the traps clip (tracker d5, 10-13).
+    `margin` seconds of air stay on both sides."""
     frame = sr // 50
     n = len(data) // frame
     if n == 0:
         return None
     rms = np.sqrt((data[: n * frame].reshape(n, frame) ** 2).mean(axis=1))
-    thr = max(floor, rel * float(np.percentile(rms, 99)))
+    p99 = float(np.percentile(rms, 99))
+    thr = max(floor, rel * p99)
     voiced = np.where(rms > thr)[0]
     if len(voiced) == 0:
         return None
-    lo = max(0, voiced[0] * frame - int(margin * sr))
-    hi = min(len(data), (voiced[-1] + 1) * frame + int(margin * sr))
+    low = max(floor * 0.3, decay_rel * p99)
+    head_low = max(floor * 0.3, head_rel * p99)
+    a, b = int(voiced[0]), int(voiced[-1])
+    while (a > 0 and (voiced[0] - a) * frame < head_max * sr
+           and rms[a - 1] > head_low):
+        a -= 1
+    while (b + 1 < n and (b - voiced[-1]) * frame < tail_max * sr
+           and rms[b + 1] > low):
+        b += 1
+    lo = max(0, a * frame - int(margin * sr))
+    tail = margin if tail_margin is None else tail_margin
+    hi = min(len(data), (b + 1) * frame + int(tail * sr))
     return lo, hi
 
 
@@ -83,7 +105,9 @@ def join_trimmed(waves: list, sr: int, gap_secs: float) -> np.ndarray:
     out = []
     for w in waves:
         w = np.asarray(w, dtype=np.float32)
-        b = speech_bounds(w, sr)
+        # a longer tail margin: the release of a final consonant needs
+        # air after it or the syllable sounds swallowed (ear, 10-13)
+        b = speech_bounds(w, sr, tail_margin=0.12)
         if b is not None:
             w = w[b[0]: b[1]]
         if out:

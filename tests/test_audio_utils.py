@@ -33,6 +33,17 @@ class SpeechBoundsTest(unittest.TestCase):
         lo, _ = speech_bounds(clip, sr)
         self.assertGreater(lo / sr, 0.4)  # starts at the tone, not the breath
 
+    def test_decaying_word_ending_is_kept(self):
+        # a vowel then 200 ms of an unvoiced ending at -26 dB: under the
+        # find-threshold (-20 dB) but above the decay floor (-40 dB) -> kept
+        sr = 24000
+        vowel = 0.5 * np.sin(np.linspace(0, 2 * np.pi * 220 * 1.0, sr))
+        ending = 0.025 * np.sin(np.linspace(0, 2 * np.pi * 3000 * 0.2, sr // 5))
+        clip = np.concatenate([np.zeros(sr // 2), vowel, ending, np.zeros(sr)]).astype(np.float32)
+        _, hi = speech_bounds(clip, sr)
+        self.assertGreaterEqual(hi / sr, 0.5 + 1.0 + 0.2)  # ending survives
+        self.assertLess(hi / sr, 0.5 + 1.0 + 0.2 + 0.1)    # but not the silence
+
     def test_all_silent(self):
         self.assertIsNone(speech_bounds(np.zeros(24000, dtype=np.float32), 24000))
 
@@ -46,7 +57,8 @@ class SpeechBoundsTest(unittest.TestCase):
             return np.concatenate([np.zeros(int(lead * sr)), tone,
                                    np.zeros(int(tail * sr))]).astype(np.float32)
         out = join_trimmed([piece(2.0), piece(1.0), piece(0.5)], sr, 0.15)
-        expected = 2.0 + 1.0 + 0.5 + 2 * 0.15 + 3 * 2 * 0.05  # + 50 ms air per edge
+        # + 50 ms of air before each piece and 120 ms after it (tail_margin)
+        expected = 2.0 + 1.0 + 0.5 + 2 * 0.15 + 3 * (0.05 + 0.12)
         self.assertAlmostEqual(len(out) / sr, expected, delta=0.06)
 
     def test_join_trimmed_empty(self):
