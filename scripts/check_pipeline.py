@@ -7,9 +7,13 @@ Usage: venv/bin/python scripts/check_pipeline.py work/<id> [--strict]
 
 Checks, in pipeline order (multitrack checks are skipped in mix mode):
   tracks     tracks.json speakers/music exist as files
-  words      words_tracks.json (or words.json) present, non-empty
+  words      words_tracks.json (or words.json) present, non-empty; no
+             5-min window with collapsed punctuation / hallucination
+             tempo / stretched words (whisper_guard.degraded_windows)
   segments   segments.json present; monotonic ids; spans sane (>0, <30 s);
-             overlap segments actually start inside another speaker's line
+             overlap segments actually start inside another speaker's line;
+             mid-sentence cuts inside run-ons <= 5% (whisper lost
+             punctuation there — repunctuate_words.py)
   translate  segments_ru.json covers every speech segment; budget outliers
   accents    accents.json covers every speech segment AND matches the
              CURRENT text_ru (stale accents sing the old text — e1v5 bug)
@@ -20,6 +24,12 @@ Checks, in pipeline order (multitrack checks are skipped in mix mode):
 Exit code 0 = all pass; 1 = failures (listed). --strict also fails on
 warnings. Run it before synthesis and before assembly — run_pipeline.py
 does this automatically.
+
+A failure one has DECIDED to ship (a known degradation) is accepted on
+record via work/<id>/doctor_accept.json: a list of {"stage",
+"contains", "reason"}; a matching failure becomes a warning tagged
+[ACCEPTED: reason], and an entry that matches nothing is flagged as
+stale. The gate stays strict by default.
 """
 import json
 import re
@@ -35,8 +45,26 @@ strict = "--strict" in sys.argv
 pre_synth = "--pre-synthesis" in sys.argv
 failures, warnings = [], []
 
+# Accepted, on-record degradations (review 10-12 #3): a run one DECIDES
+# to ship despite a failure (e.g. a known unpunctuated stretch in an
+# old transcript) had no override short of editing code. work/<id>/
+# doctor_accept.json = [{"stage": ..., "contains": ..., "reason": ...}]
+# downgrades a MATCHING failure to a warning, carrying the reason. The
+# gate stays strict by default; an entry that matched nothing is itself
+# a warning, so stale acceptances cannot linger silently.
+_accept_path = work / "doctor_accept.json"
+accepts = []
+if _accept_path.exists():
+    accepts = [dict(a, used=False) for a in json.loads(_accept_path.read_text())]
+
 
 def fail(stage, msg):
+    for a in accepts:
+        if a.get("stage") == stage and a.get("contains", "") in msg:
+            a["used"] = True
+            warnings.append(f"[{stage}] {msg} [ACCEPTED: "
+                            f"{a.get('reason', 'no reason given')}]")
+            return
     failures.append(f"[{stage}] {msg}")
 
 
@@ -73,6 +101,26 @@ if words_path.exists():
     words = _w["words"] if isinstance(_w, dict) else _w  # old runs: bare list
     if not words:
         fail("words", f"{words_path.name} is empty")
+    else:
+        # whisper degradation gate (TODO #12): until now the doctor only
+        # checked that words exist — a 15-minute punctuation collapse
+        # sailed through and surfaced as bad segmentation later. Windows
+        # are measured per speaker in multitrack (islands), globally in mix.
+        from whisper_guard import degraded_windows, hallucination_loops
+        groups = {}
+        for w in words:
+            groups.setdefault(w.get("speaker"), []).append(w)
+        for spk, ws in sorted(groups.items(), key=lambda kv: str(kv[0])):
+            tag = f" {spk}" if spk else ""
+            for d in degraded_windows(ws):
+                (fail if d["severity"] == "fail" else warn)(
+                    "words", f"whisper degraded{tag} "
+                             f"{d['t0']/60:.0f}-{d['t1']/60:.0f} min: "
+                             f"{d['reason']} — re-transcribe that stretch "
+                             "or fix punctuation with repunctuate_words.py")
+            for t, phrase in hallucination_loops(ws):
+                warn("words", f"possible hallucination loop{tag} at "
+                              f"{t/60:.0f} min: «{phrase}» repeats")
 else:
     fail("words", f"{words_path.name} missing")
 
@@ -96,6 +144,24 @@ if (work / "segments.json").exists():
         if not covered:
             warn("segments", f"seg {s['id']} marked overlap but no other "
                              f"speaker is talking at {s['start']:.1f}s")
+    # run-on cut gate (TODO #12): a segment cut mid-sentence inside a
+    # run-on means whisper lost punctuation there — the halves are
+    # untranslatable on their own. A few are survivable; a large share
+    # means a degraded transcript shipped into segmentation.
+    from segmenting import runon_cut_ids
+    speech_n = sum(1 for s in segs if s.get("type") != "orig")
+    runons, _ = runon_cut_ids(segs)
+    if runons and speech_n:
+        share = len(runons) / speech_n
+        (fail if share > 0.05 else warn)(
+            "segments", f"{len(runons)} mid-sentence cuts inside run-ons "
+                        f"({share:.0%}): ids {runons[:15]} — restore "
+                        "punctuation with repunctuate_words.py, re-segment")
+    marked = [s["id"] for s in segs if s.get("cut") == "mid-sentence"]
+    if marked:
+        warn("segments", f"{len(marked)} segments carry cut:\"mid-sentence\" "
+                         f"(last-resort split of a run-on): {marked[:15]} — "
+                         "the translator must treat each half as a fragment")
 else:
     fail("segments", "segments.json missing")
 
@@ -234,6 +300,11 @@ if ru is not None:
             fail("orig", f"seg {s['id']}: {s['file']} missing")
 
 # ── verdict ─────────────────────────────────────────────────────────
+for a in accepts:
+    if not a["used"]:
+        warn("doctor", f"doctor_accept.json entry matched NOTHING "
+                       f"(stale acceptance, remove it): {a.get('stage')} / "
+                       f"«{a.get('contains')}»")
 print(f"mode: {mode}")
 for w in warnings:
     print("WARN", w)

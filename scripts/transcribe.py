@@ -13,6 +13,11 @@ after ~90 min, which breaks sentence segmentation downstream). Chunk
 boundaries are snapped to speech pauses so no word is ever cut:
 diarization gaps when diarization.json exists (run diarize.py first for
 best cuts), otherwise the quietest moment near the nominal boundary.
+Each chunk also runs under whisper_guard.guarded_pass (TODO #12): a
+collapse that starts INSIDE a chunk used to survive to the chunk's end
+unnoticed — now the pass restarts at the last sentence end before it,
+and stretched words (skipped speech) are re-transcribed and spliced,
+the same protection the multitrack flow already had.
 Writes words.json (+ segments_raw.json for the legacy flow).
 """
 import json
@@ -79,25 +84,41 @@ while t < total - SEARCH:
     t = bounds[-1] + chunk_secs
 bounds.append(total)
 
+from whisper_guard import guarded_pass  # noqa: E402
+
+tmp = work / "tmp"
+tmp.mkdir(exist_ok=True)
 language = None
 words, segments = [], []
-for a, b in zip(bounds, bounds[1:]):
-    clip = work / f"chunk_{int(a)}.wav"
-    subprocess.check_call(["ffmpeg", "-y", "-v", "quiet", "-ss", str(a),
-                           "-t", str(b - a), "-i", str(audio), str(clip)])
-    r = mlx_whisper.transcribe(str(clip), path_or_hf_repo=MODEL, word_timestamps=True)
+
+
+def run_whisper(a: float, b: float):
+    """Transcribe [a, b) of the mix → (segments, words), timeline-offset."""
+    clip = tmp / "mix_chunk.wav"
+    subprocess.check_call(["ffmpeg", "-y", "-v", "quiet", "-ss", f"{a:.3f}",
+                           "-t", f"{b - a:.3f}", "-i", str(audio),
+                           "-ac", "1", "-ar", "16000", str(clip)])
+    global language
+    r = mlx_whisper.transcribe(str(clip), path_or_hf_repo=MODEL,
+                               word_timestamps=True)
+    clip.unlink(missing_ok=True)
     language = language or r.get("language")
+    segs, ws = [], []
     for s in r["segments"]:
         if s["text"].strip():
-            segments.append({"start": round(s["start"] + a, 3),
-                             "end": round(s["end"] + a, 3),
-                             "text": s["text"].strip()})
+            segs.append({"start": round(s["start"] + a, 3),
+                         "end": round(s["end"] + a, 3),
+                         "text": s["text"].strip()})
         for w in s.get("words", []):
-            words.append({"start": round(w["start"] + a, 3),
-                          "end": round(w["end"] + a, 3), "word": w["word"]})
-    clip.unlink()
-    enders = sum(1 for s_ in segments if s_["start"] >= a
-                 and s_["text"].rstrip().endswith((".", "!", "?", "…")))
+            ws.append({"start": round(w["start"] + a, 3),
+                       "end": round(w["end"] + a, 3), "word": w["word"]})
+    return segs, ws
+
+
+for a, b in zip(bounds, bounds[1:]):
+    segs, ws = guarded_pass(run_whisper, a, b)
+    segments += segs
+    words += ws
     print(f"chunk {a:.0f}-{b:.0f}s: {len(words)} words so far", flush=True)
 
 (work / "segments_raw.json").write_text(

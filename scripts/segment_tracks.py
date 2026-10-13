@@ -34,8 +34,9 @@ from cli_args import opt
 import numpy as np
 
 from audio_utils import decode
-from segmenting import (GAP_BREAK, MAX_PAUSE, SENT_END, TARGET_SECS,
-                        build_sentences, merge_short, split_long, words_text)
+from segmenting import (GAP_BREAK, MAX_PAUSE, MAX_SENT_SECS, SENT_END,
+                        TARGET_SECS, build_sentences, merge_short,
+                        runon_cut_ids, split_long_flagged, words_text)
 
 # cross-track housekeeping (none of this exists in the mix flow):
 ECHO_DT = 0.7        # sec; same text within this start offset = mic bleed
@@ -127,40 +128,36 @@ n_echo_words = len(drop)
 words = [w for w in words if id(w) not in drop]
 print(f"cross-track echo: dropped {n_echo_words} words heard louder on another stem")
 
-MAX_SENT_SECS = 25.0  # longer sentences are split (whisper sometimes loses
-                      # punctuation, and very long lines are hard to dub):
-                      # at the largest pause after a comma (a clause
-                      # boundary, translatable on its own); at the largest
-                      # pause only when the sentence has no commas
-
-
 # per-speaker sentence building (segmenting.py: the same rules as
-# segment_sentences.py, plus the run-on guards GAP_BREAK / split_long)
+# segment_sentences.py, plus the run-on guards GAP_BREAK / split_long;
+# MAX_SENT_SECS lives there too). A last-resort cut with no clause mark
+# carries cut:"mid-sentence" into the segment (TODO #12).
 segments = []
 dropped_orphan = 0
 for spk in sorted({w["speaker"] for w in words}):
     stream = [w for w in words if w["speaker"] == spk]
     sentences = build_sentences(stream, gap_break=GAP_BREAK)
-    sentences = [p for ws in sentences for p in split_long(ws, MAX_SENT_SECS)]
+    pieces = [pf for ws in sentences
+              for pf in split_long_flagged(ws, MAX_SENT_SECS)]
     # stray bleed words split off by the gap rule come out as tiny
     # fragments with no sentence-final punctuation — not translatable
-    kept_sents = []
-    for ws in sentences:
+    kept = []
+    for ws, mid in pieces:
         text = words_text(ws)
         if (len(ws) <= 3 and not text.rstrip().endswith(SENT_END)
                 and not NONVERBAL.match(text)):
             dropped_orphan += 1
             continue
-        kept_sents.append(ws)
-    sentences = kept_sents
+        kept.append((ws, mid))
     items = []
-    for ws in sentences:
+    for ws, mid in kept:
         text = words_text(ws)
         if not text:
             continue
         items.append({"start": round(ws[0]["start"], 3),
                       "end": round(ws[-1]["end"], 3),
-                      "speaker": spk, "text": text})
+                      "speaker": spk, "text": text,
+                      **({"cut": "mid-sentence"} if mid else {})})
     segments.extend(merge_short(items, TARGET_SECS, MAX_PAUSE))
 
 # ── cross-track housekeeping ────────────────────────────────────────
@@ -362,21 +359,9 @@ out = {"language": language,
        "segments": [{"id": i, **s} for i, s in enumerate(segments)]}
 (work / out_name).write_text(json.dumps(out, ensure_ascii=False, indent=1))
 
-# mid-sentence cut report: a segment should end at a sentence end. A
-# cut is legitimate only when the speaker really stopped (another voice
-# fills the gap — an interruption); a cut inside a run-on is a defect.
-runon_cuts, interrupted = [], 0
-for spk in out["speakers"]:
-    own = [s for s in out["segments"]
-           if s["speaker"] == spk and s.get("type") != "orig"]
-    for a, b in zip(own, own[1:]):
-        if a["text"].rstrip().endswith(SENT_END + ('"',)):
-            continue
-        if any(o["speaker"] != spk and o["start"] < b["start"] and o["end"] > a["end"]
-               for o in out["segments"]):
-            interrupted += 1
-        elif b["start"] - a["end"] <= GAP_BREAK:
-            runon_cuts.append(a["id"])
+# mid-sentence cut report (segmenting.runon_cut_ids, shared with the
+# doctor's gate): a cut inside a run-on is a defect.
+runon_cuts, interrupted = runon_cut_ids(out["segments"])
 print(f"mid-sentence ends: {interrupted} at interruptions (ok), "
       f"{len(runon_cuts)} inside run-ons"
       + (f" — ids {runon_cuts[:20]}: whisper lost punctuation there, "

@@ -24,7 +24,8 @@ from cli_args import opt
 
 import mlx_whisper
 
-from segmenting import MAX_PAUSE, SENT_END, TARGET_SECS, build_sentences, merge_short
+from segmenting import (MAX_PAUSE, MAX_SENT_SECS, SENT_END, TARGET_SECS,
+                        build_sentences, merge_short, split_long_flagged)
 
 MODEL = "mlx-community/whisper-large-v3-turbo"
 
@@ -83,8 +84,13 @@ def speaker_at(start: float, end: float) -> str | None:
 for w in words:
     w["speaker"] = speaker_at(w["start"], w["end"])
 
-# build sentences: a sentence ends at sentence-final punctuation
+# build sentences: a sentence ends at sentence-final punctuation; a
+# run-on longer than MAX_SENT_SECS is split like in the multitrack flow
+# (previously mix run-ons were not split at all — a 2-minute
+# punctuation collapse became one undubbable segment, TODO #12), and a
+# last-resort cut with no clause mark carries cut:"mid-sentence"
 sentences = build_sentences(words)
+pieces = [pf for ws in sentences for pf in split_long_flagged(ws, MAX_SENT_SECS)]
 
 
 def majority_speaker(ws) -> str:
@@ -101,8 +107,9 @@ sent_items = [
         "end": round(ws[-1]["end"], 3),
         "speaker": majority_speaker(ws),
         "text": "".join(w["word"] for w in ws).strip(),
+        **({"cut": "mid-sentence"} if mid else {}),
     }
-    for ws in sentences
+    for ws, mid in pieces
     if "".join(w["word"] for w in ws).strip()
 ]
 

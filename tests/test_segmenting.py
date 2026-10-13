@@ -5,7 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from segmenting import (GAP_BREAK, MAX_PAUSE, SENT_END, TARGET_SECS,  # noqa: E402
-                        build_sentences, merge_short, split_long, words_text)
+                        build_sentences, merge_short, runon_cut_ids,
+                        split_long, split_long_flagged, words_text)
 
 
 def W(start, end, word):
@@ -83,6 +84,51 @@ class TestMergeShort(unittest.TestCase):
         merge_short(items)
         self.assertEqual(items[0]["text"], "One.")
         self.assertEqual(items[0]["end"], 4)
+
+    def test_cut_flag_follows_the_tail(self):
+        # TODO #12: the mid-sentence flag describes a piece's END — after
+        # a merge the tail's end is the one that counts
+        head = dict(self.item(0, 4), cut="mid-sentence")
+        tail = self.item(4.5, 8)  # ends cleanly
+        self.assertNotIn("cut", merge_short([head, tail])[0])
+        head2, tail2 = self.item(0, 4), dict(self.item(4.5, 8), cut="mid-sentence")
+        self.assertEqual(merge_short([head2, tail2])[0]["cut"], "mid-sentence")
+
+
+class TestSplitLongFlagged(unittest.TestCase):
+    def test_clause_cut_is_not_flagged(self):
+        ws = [W(0, 1, " a,"), W(2, 3, " b"), W(6, 7, " c"), W(7, 30, " d")]
+        parts = split_long_flagged(ws, 10.0)
+        self.assertFalse(parts[0][1])  # cut after the clause mark: fine
+
+    def test_markless_cut_is_flagged(self):
+        ws = [W(0, 1, " a"), W(2, 3, " b"), W(6, 7, " c"), W(7, 30, " d")]
+        parts = split_long_flagged(ws, 10.0)
+        self.assertTrue(parts[0][1])   # last-resort mid-sentence cut
+        self.assertFalse(parts[-1][1])  # the final piece ends naturally
+
+
+class TestRunonCutIds(unittest.TestCase):
+    SEG = staticmethod(lambda i, spk, a, b, text: {
+        "id": i, "speaker": spk, "start": a, "end": b, "text": text})
+
+    def test_cut_inside_runon_is_flagged(self):
+        segs = [self.SEG(0, "S0", 0, 10, "без знака конца"),
+                self.SEG(1, "S0", 10.5, 20, "продолжение.")]
+        runons, interrupted = runon_cut_ids(segs)
+        self.assertEqual((runons, interrupted), ([0], 0))
+
+    def test_interruption_is_legitimate(self):
+        segs = [self.SEG(0, "S0", 0, 10, "без знака конца"),
+                self.SEG(2, "S1", 9.0, 12.0, "перебил."),
+                self.SEG(1, "S0", 10.5, 20, "продолжение.")]
+        runons, interrupted = runon_cut_ids(segs)
+        self.assertEqual((runons, interrupted), ([], 1))
+
+    def test_sentence_end_is_clean(self):
+        segs = [self.SEG(0, "S0", 0, 10, "фраза целиком."),
+                self.SEG(1, "S0", 10.5, 20, "вторая.")]
+        self.assertEqual(runon_cut_ids(segs), ([], 0))
 
 
 if __name__ == "__main__":
