@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from manifest_bridge import new_hash, ref_hasher, seg_hash  # noqa: E402
+from pacing import PACE_VERSION  # noqa: E402
 
 
 class TestHashes(unittest.TestCase):
@@ -27,7 +28,11 @@ class TestHashes(unittest.TestCase):
         seg = {"id": 5, "speaker": "S0", "text_ru": "plain"}
         self.assertEqual(seg_hash(seg, {"5": "acc+ented"}, rs), new_hash("S0", "acc+ented", "rS0"))
         self.assertEqual(seg_hash(seg, {}, rs), new_hash("S0", "plain", "rS0"))
-        self.assertEqual(new_hash("S0", "t", "r"), hashlib.sha1(b"S0|t|r").hexdigest())
+        # the pacing salt is part of the entry: a pacing change invalidates
+        # every clip the way a text edit does (tracker d5)
+        self.assertEqual(new_hash("S0", "t", "r"),
+                         hashlib.sha1(f"S0|t|r|{PACE_VERSION}".encode()).hexdigest())
+        self.assertNotEqual(new_hash("S0", "t", "r"), hashlib.sha1(b"S0|t|r").hexdigest())
 
 
 if __name__ == "__main__":

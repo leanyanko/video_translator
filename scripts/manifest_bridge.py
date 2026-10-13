@@ -32,6 +32,8 @@ import os
 import re
 from pathlib import Path
 
+from pacing import PACE_VERSION
+
 
 def norm_text(t, respell=None):
     """Words-only comparison form shared by the freshness checks
@@ -54,6 +56,39 @@ def voiced(seg: dict) -> bool:
     and echo lines (repeat_audit --mark-echo; assemble drops them) are
     not voiced — synthesizing them is pure waste (TODO #9)."""
     return seg.get("type") != "orig" and not seg.get("echo")
+
+
+def slot_ends(segments: list) -> dict:
+    """id -> where each dubbed line's slot ends, None for the last line.
+
+    The slot a dubbed line may fill runs until the next sequential item
+    that is either a VOICED line or a pasted original (type:"orig") of
+    the SAME speaker — his own laugh or an untranslated low_conf line
+    is sequential in his timeline, he cannot say two things at once.
+    Other speakers' pastes ("mm-hmm" backchannel, their laughs) and
+    overlap lines are laid on top of whatever plays and never end a
+    slot. Pass the FULL segment list (pastes included); echo lines are
+    ignored here. Shared by synthesize (pacing) and assemble (atempo)
+    so the two stages cannot disagree again: assemble used to count
+    every paste as a slot end, so a 0.5 s "mm-hmm" dropped into an 11 s
+    line cut its slot to the floor and sped it up 1.35x for nothing.
+    Count rule, e1v6: 121/817 dubbed lines had an OTHER-speaker paste
+    as the next sequential item before the next voiced line (46 more
+    had a same-speaker paste there, which correctly still ends the
+    slot; tracker s16)."""
+    timeline = sorted((s for s in segments
+                       if not s.get("echo") and not s.get("overlap")),
+                      key=lambda s: s["start"])
+    out = {}
+    for i, s in enumerate(timeline):
+        if not voiced(s):
+            continue
+        out[s["id"]] = None
+        for nxt in timeline[i + 1:]:
+            if voiced(nxt) or nxt.get("speaker") == s.get("speaker"):
+                out[s["id"]] = nxt["start"]
+                break
+    return out
 
 
 def missing_clips(segments: list, tts_dir: Path, min_bytes: int = 1024) -> list:
@@ -106,7 +141,15 @@ def rotate_accents(work: Path, new_out: dict) -> bool:
 
 
 def new_hash(speaker: str, text: str, ref_sha: str) -> str:
-    return hashlib.sha1(f"{speaker}|{text}|{ref_sha}".encode()).hexdigest()
+    """speaker | accented text | ref hash | pacing version. The pacing
+    salt (pacing.PACE_VERSION) makes every clip sung under an older
+    duration rule stale, the same way a text edit does — otherwise a
+    pacing change would leave shipped dirs slow forever. Known gap: the
+    accents.prev bridge and the old-scheme upgrade stamp the CURRENT
+    salt onto legacy clips, so a pre-manifest dir is not re-paced by
+    this alone (delete its tts_f5/ to re-sing it)."""
+    return hashlib.sha1(
+        f"{speaker}|{text}|{ref_sha}|{PACE_VERSION}".encode()).hexdigest()
 
 
 def old_hash(speaker: str, text: str) -> str:

@@ -8,7 +8,11 @@ charactr/vocos-mel-24khz (auto-downloaded). This is the PRODUCTION TTS.
 
 Usage: venv-f5/bin/python scripts/synthesize_f5.py work/<id> [--min-secs A] [--limit-secs B]
 Reads segments_ru.json + refs/, applies RUAccent stress marks, writes
-tts_f5/seg_XXXX.wav. Resumable.
+tts_f5/seg_XXXX.wav (+ manifest.json, pace.json). Resumable.
+
+Clip length is planned, not estimated (pacing.py): the speaker's own
+tempo from his reference, squeezed only to fit the slot, handed to F5
+as fix_duration. Overlap lines get their own span as slot.
 """
 import json
 import sys
@@ -56,19 +60,22 @@ REFS = work / ("refs_f5" if (work / "refs_f5").exists() else "refs")
 segments = json.loads((work / "segments_ru.json").read_text())["segments"]
 # orig = pasted, not voiced; echo = dropped by assemble (synthesizing
 # them burned ~5 min/run on clips that went straight to the bin)
-from manifest_bridge import voiced as _voiced  # noqa: E402
+from manifest_bridge import slot_ends, voiced as _voiced  # noqa: E402
+# slot = time until the next voiced line or own-speaker paste starts
+# (manifest_bridge.slot_ends, the same rule assemble fits atempo
+# against — computed on the FULL list, pastes included); used to pace
+# generation. Overlap segments live outside the sequential timeline:
+# they get their own span as slot and must not shrink their neighbours'.
+_ends = slot_ends(segments)
 segments = [s for s in segments if _voiced(s)]
-# slot = time until the next segment starts; used to pace generation.
-# Overlap segments live outside the sequential timeline: they get their
-# own span as slot and must not shrink their neighbours' slots.
-timeline = [s for s in segments if not s.get("overlap")]
 slots = {}
-for i, s in enumerate(timeline):
-    nxt = timeline[i + 1]["start"] if i + 1 < len(timeline) else s["end"] + 2.0
-    slots[s["id"]] = max(nxt - s["start"], 1.0)
 for s in segments:
     if s.get("overlap"):
         slots[s["id"]] = max(s["end"] - s["start"], 1.0)
+    else:
+        nxt = _ends[s["id"]]
+        nxt = s["end"] + 2.0 if nxt is None else nxt
+        slots[s["id"]] = max(nxt - s["start"], 1.0)
 all_speech = list(segments)  # unfiltered: the manifest covers the whole dir
 segments = [s for s in segments if s["start"] >= min_secs]
 if limit_secs is not None:
@@ -174,12 +181,27 @@ from text_split import split_single_batch
 import numpy as np
 import soundfile as sf
 
+# ── pacing (tracker d5; the arithmetic and its rationale live in pacing.py)
+# Each clip is given an EXACT length via F5's fix_duration: the original
+# line's span (lip sync), bounded to a plausible tempo, squeezed only to
+# fit the slot. fix_duration counts from the reference as F5
+# PREPROCESSES it (silence split, edge trim, +50 ms) — so the reference
+# is run through the same preprocess once per speaker and that length
+# is used, not the file's. tts_f5/pace.json records the plan per clip
+# for the doctor and for re-measuring what atempo is left downstream.
+from f5_tts.infer.utils_infer import preprocess_ref_audio_text  # noqa: E402
+from pacing import allocate_pieces, pace_chars, plan_clip  # noqa: E402
+
+_quiet = lambda *a, **k: None  # noqa: E731
 ref_text_cache = {}
-piece_cap = {}  # per speaker: our split cap, set BELOW F5's own
+ref_sec_f5 = {}   # per speaker: length of the PREPROCESSED reference
+piece_cap = {}    # per speaker: our split cap, set BELOW F5's own
+pace_path = outdir / "pace.json"
+pace_log = json.loads(pace_path.read_text()) if pace_path.exists() else {}
 # F5 internally re-chunks gen_text at max_chars = ref_bytes/ref_sec *
-# (22 - ref_sec) * speed and BATCHES the chunks — multi-batch segfaults
-# on MPS. Keep every piece under that limit (speed>=1 only raises it)
-# so each infer call stays a single batch.
+# (22 - ref_sec) and BATCHES the chunks — multi-batch segfaults on MPS.
+# Keep every piece under that limit so each infer call stays a single
+# batch.
 t_start = time.time()
 for n, seg in enumerate(todo, 1):
     spk = seg["speaker"]
@@ -191,32 +213,29 @@ for n, seg in enumerate(todo, 1):
         f5_max = (len(ref_text_cache[spk].encode("utf-8"))
                   / ref_sec * max(22 - ref_sec, 1.0))
         piece_cap[spk] = f5_max
-        print(f"{spk}: ref {ref_sec:.1f}s, F5 max_chars {f5_max:.0f} bytes",
-              flush=True)
+        processed, _ = preprocess_ref_audio_text(
+            str(ref_wav), ref_text_cache[spk], show_info=_quiet)
+        pinfo = sf.info(processed)
+        ref_sec_f5[spk] = pinfo.frames / pinfo.samplerate
+        print(f"{spk}: ref {ref_sec:.1f}s (F5 sees {ref_sec_f5[spk]:.1f}s), "
+              f"F5 max_chars {f5_max:.0f} bytes", flush=True)
     text = accents.get(str(seg["id"]), seg["text_ru"])
     t0 = time.time()
-    # pace so estimated duration (~12.5 plain chars/sec) fits the slot
-    plain_chars = len(seg["text_ru"])
-    est_dur = plain_chars / 12.5
-    if seg.get("fill_span"):
-        # an overlapped (interrupted) line must occupy its FULL real
-        # span so the interrupter audibly talks over it — slow down if
-        # the translation is shorter than the original speech
-        span = max(seg["end"] - seg["start"], 1.0)
-        speed = min(max(est_dur / span, 0.8), 1.3)
-    else:
-        speed = min(max(est_dur / (slots[seg["id"]] * 0.95), 1.0), 1.3)
+    chars = pace_chars(text)
+    span = seg["end"] - seg["start"]
+    wanted, rate = plan_clip(chars, span, slots[seg["id"]])
+    cap = min(150, int(piece_cap[spk] * 0.9))
+    pieces = split_single_batch(text, cap)
     waves = []
     sr_out = 24000
-    # F5's limit scales with speed; speed<1 (slowed fill_span) shrinks it
-    cap = min(150, int(piece_cap[spk] * min(speed, 1.0) * 0.9))
-    for piece in split_single_batch(text, cap):
+    for piece, secs in zip(pieces, allocate_pieces(pieces, wanted)):
         wav, sr_out, _ = tts.infer(
             ref_file=str(ref_wav),
             ref_text=ref_text_cache[spk],
             gen_text=piece,
-            speed=speed,
-            show_info=lambda *a, **k: None,
+            speed=1.0,
+            fix_duration=ref_sec_f5[spk] + secs,
+            show_info=_quiet,
             seed=SEED,
         )
         waves.append(np.asarray(wav))
@@ -225,8 +244,15 @@ for n, seg in enumerate(todo, 1):
     )
     manifest[str(seg["id"])] = seg_hash(seg)
     manifest_path.write_text(json.dumps(manifest, indent=1))
-    rate = (time.time() - t_start) / n
-    print(f"[{n}/{len(todo)}] seg {seg['id']:04d} {spk} "
-          f"({time.time()-t0:.1f}s, avg {rate:.1f}s/seg)", flush=True)
+    pace_log[str(seg["id"])] = {
+        "chars": chars, "span": round(span, 2), "wanted": round(wanted, 2),
+        "slot": round(slots[seg["id"]], 2), "rate": round(rate, 1),
+        "pieces": len(pieces)}
+    pace_path.write_text(json.dumps(pace_log, indent=1))
+    per_seg = (time.time() - t_start) / n
+    print(f"[{n}/{len(todo)}] seg {seg['id']:04d} {spk} {chars} chars, "
+          f"original {span:.1f}s -> {wanted:.1f}s ({rate:.1f} ch/s) in a "
+          f"{slots[seg['id']]:.1f}s slot ({time.time()-t0:.1f}s, "
+          f"avg {per_seg:.1f}s/seg)", flush=True)
 
 print("done")

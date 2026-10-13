@@ -5,7 +5,9 @@ Model: none (ffprobe/ffmpeg + pydub audio arithmetic).
 
 Usage: venv/bin/python scripts/assemble.py work/<id>
 Each clip is placed at its segment's start time. If a clip is longer than
-the slot before the next segment, it is sped up with ffmpeg atempo
+the slot before the next DUBBED line or the speaker's own type:"orig"
+paste (other speakers' pastes and overlap lines are laid on top and do
+not end a slot), it is sped up with ffmpeg atempo
 (capped at MAX_TEMPO so it still sounds natural; beyond that it simply
 overflows into the following pause). Produces dubbed.wav and video_ru.mp4.
 """
@@ -44,9 +46,13 @@ tmp.mkdir(exist_ok=True)
 # video of music and pastes (10-09: Chatterbox died on a dependency,
 # tts_cbx stayed empty, assemble reported DONE on 0/22 clips). A few
 # missing clips are survivable noise; a large share is a broken run.
-from manifest_bridge import missing_clips  # noqa: E402
+from manifest_bridge import missing_clips, slot_ends  # noqa: E402
 
 voiced = [s for s in segments + overlap_segments if s.get("type") != "orig"]
+# slot end per line = the next voiced line or own-speaker paste (same
+# rule synthesize paces against); other speakers' pastes are laid on
+# top, never slot-bearing
+slot_end = slot_ends(segments)
 _missing = missing_clips(voiced, tts_dir)
 if _missing and voiced and not flag("--force-partial"):
     share = len(_missing) / len(voiced)
@@ -139,7 +145,9 @@ for i, seg in enumerate(segments):
     # own timestamp, tolerating at most 1s delay from an overrunning
     # predecessor (the overlap tail is quiet crosstalk, lag is worse)
     place_at = max(seg["start"], min(cursor, seg["start"] + 1.0))
-    next_start = segments[i + 1]["start"] if i + 1 < len(segments) else video_dur
+    next_start = slot_end.get(seg["id"])
+    if next_start is None:
+        next_start = video_dur
     slot = max(next_start - place_at, 0.5)
 
     dur = probe_duration(clip_path)

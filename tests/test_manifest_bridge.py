@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from manifest_bridge import (load_or_bridge, missing_clips,  # noqa: E402
                              new_hash, old_hash, norm_text, rotate_accents,
-                             stale_ids, voiced)
+                             slot_ends, stale_ids, voiced)
 
 SEGS = [{"id": 1, "speaker": "SPEAKER_00"}, {"id": 2, "speaker": "SPEAKER_00"},
         {"id": 3, "speaker": "SPEAKER_03"}]
@@ -211,6 +211,45 @@ class VoicedTest(unittest.TestCase):
         self.assertTrue(voiced({"id": 1, "text_ru": "х"}))
         self.assertFalse(voiced({"id": 2, "type": "orig"}))
         self.assertFalse(voiced({"id": 3, "echo": True, "text_ru": "х"}))
+
+
+class SlotEndsTest(unittest.TestCase):
+    """s16: an 11 s line with a 0.5 s "mm-hmm" paste dropped into it
+    must keep its slot up to the next DUBBED line, not the paste."""
+
+    SEGS = [
+        {"id": 1, "start": 10.0, "end": 21.0, "text_ru": "длинная"},
+        {"id": 9500, "start": 10.5, "end": 11.0, "type": "orig",
+         "auto_track": True, "file": "laughs/x.wav"},
+        {"id": 2, "start": 15.0, "end": 16.0, "text_ru": "поверх",
+         "overlap": True},
+        {"id": 3, "start": 17.0, "end": 18.0, "text_ru": "эхо", "echo": True},
+        {"id": 4, "start": 22.0, "end": 25.0, "text_ru": "следующая"},
+        {"id": 5, "start": 26.0, "end": 27.0, "type": "orig"},
+    ]
+
+    def test_other_speaker_pastes_overlap_and_echo_do_not_end_a_slot(self):
+        segs = [{**s, "speaker": "B" if s["id"] in (9500, 5) else "A"}
+                for s in self.SEGS]
+        ends = slot_ends(segs)
+        self.assertEqual(ends[1], 22.0)
+        self.assertIsNone(ends[4])  # last dubbed line: caller's tail
+        self.assertEqual(set(ends), {1, 4})  # only sequential voiced lines
+
+    def test_same_speaker_paste_ends_the_slot(self):
+        # his own laugh 0.5 s after his line: the dub must not run over it
+        segs = [{**s, "speaker": "A"} for s in self.SEGS]
+        segs[1] = {**segs[1], "start": 21.5, "end": 22.0}
+        ends = slot_ends(segs)
+        self.assertEqual(ends[1], 21.5)
+        self.assertEqual(ends[4], 26.0)  # trailing own paste ends it too
+
+    def test_unsorted_input(self):
+        segs = [{**s, "speaker": "A"} for s in reversed(self.SEGS)]
+        self.assertEqual(slot_ends(segs)[1], 10.5)  # own paste inside the line
+
+    def test_empty(self):
+        self.assertEqual(slot_ends([]), {})
 
 
 if __name__ == "__main__":
