@@ -24,7 +24,10 @@
    "en": "And superconducting is nice.",
    "ru": "А сверхпроводник — это красиво.",
    "speaker": "SPEAKER_00",
-   "span": [126.3, 128.2],
+   "span": [
+    126.3,
+    128.2
+   ],
    "why": "Whisper пропустил фразу целиком (TODO #13); найдена проверкой речи harvest, добавлена ручным сегментом (overlap поверх Миши)",
    "date": "2026-10-13"
   },
@@ -33,6 +36,54 @@
    "transcript_fix": "Earnshaw's theorem",
    "ru": "теорема Ирншоу",
    "why": "Whisper стабильно слышит фамилию Earnshaw как «Ernst Scholl»; русская традиция — теорема Ирншоу",
+   "date": "2026-10-13"
+  },
+  {
+   "en": "I think I was...",
+   "ru": "Думаю, я…",
+   "speaker": "SPEAKER_00",
+   "span": [
+    4257.6,
+    4258.6
+   ],
+   "span_note": "episode time; baseline20 cut = episode − 3382.0",
+   "why": "Whisper пропустил реакцию (TODO #13); найдена проверкой речи harvest на baseline20, добавлена ручным сегментом (overlap)",
+   "date": "2026-10-13"
+  },
+  {
+   "en": "Okay, okay, interesting.",
+   "ru": "Так, интересно.",
+   "speaker": "SPEAKER_02",
+   "span": [
+    3516.2,
+    3517.3
+   ],
+   "span_note": "episode time; baseline20 cut = episode − 3382.0",
+   "why": "Whisper пропустил реакцию (TODO #13); найдена проверкой речи harvest на baseline20, добавлена ручным сегментом (overlap)",
+   "date": "2026-10-13"
+  },
+  {
+   "en": "Yes, yes, yes.",
+   "ru": "Да-да-да.",
+   "speaker": "SPEAKER_02",
+   "span": [
+    4016.4,
+    4017.3
+   ],
+   "span_note": "episode time; baseline20 cut = episode − 3382.0",
+   "why": "Whisper пропустил реакцию (TODO #13); найдена проверкой речи harvest на baseline20, добавлена ручным сегментом (overlap)",
+   "date": "2026-10-13"
+  },
+  {
+   "en": "Yeah, that's true.",
+   "ru": "Да, это правда.",
+   "speaker": "SPEAKER_03",
+   "span": [
+    3870.4,
+    3871.8
+   ],
+   "span_note": "episode time; baseline20 cut = episode − 3382.0",
+   "why": "Whisper пропустил реакцию (TODO #13); найдена проверкой речи harvest на baseline20, добавлена ручным сегментом (overlap)",
    "date": "2026-10-13"
   }
  ]

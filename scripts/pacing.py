@@ -1,49 +1,20 @@
 #!/usr/bin/env python
-"""Clip duration planning for F5 — the speaker's own tempo, squeezed
-only to fit the slot (tracker d5).
+"""Clip duration planning for F5 (tracker d5; story in docs/pacing.md).
 
 Model: none (pure arithmetic; synthesize_f5.py applies the result via
 F5's fix_duration).
 
-Why this exists. F5 sets the length of what it generates by a formula,
-not by listening to itself:
-
-    duration = ref_sec + ref_sec / len(ref_text.utf8) * len(gen_text.utf8) / speed
-
-Bytes, not characters. Our references are English (1 byte/char), the
-lines are Russian (2 bytes/char, 1.92 with stress marks), so every
-line was budgeted ~1.9x the time the speaker would actually need —
-measured on baseline20: clips came out at 0.53x the reference's own
-chars/sec for all three speakers. The old pacing (`est = chars / 12.5`,
-speed 1.0–1.3) did not know this; it fought the phantom with speed 1.3
-and assemble fought the rest with atempo 1.35, and lines still ran
-over. A second rule in the same F5 function sings any piece under 10
-bytes (five Cyrillic letters: «Да.», «Нет.») at speed 0.3. And a slow
-reference (Misha: 10 chars/s vs Dan 16, Mike 22) multiplies on top.
-
-The rule here: a dubbed line lasts as long as the ORIGINAL line — that
-is how long the speaker's lips move, and the old pipeline matched it
-only by accident (x1.9 bytes / 1.3 speed / 1.35 atempo ≈ x1.08). The
-span is bounded to a plausible Russian tempo: never faster than
-PACE_MAX (a long translation overruns into the slot instead; F5 is
-never asked to articulate faster than that — any further squeeze is
-assemble's atempo, a time-stretch of a clean rendering) and never
-slower than PACE_MIN (a hesitant original does not make the dub drawl). A first version paced
-lines by the speaker's REFERENCE tempo instead; it lost lip sync (Dan
-20–30 % shorter than his lips), kept Misha slow (his reference is
-slow) and swallowed words. The result goes to F5 as an exact duration
-(fix_duration = processed_ref_sec + wanted + SILENCE_PAD), which also
-bypasses the 10-byte rule. F5 paints ~0.5 s of silence around EVERY
-call (lead and tail, imitating the reference's air) and crams the
-words into the rest; a line is sung in sentence-sized pieces, one call
-each, so the waste is per piece, not per line — a 3-piece line lost
-~1 s of speaking time and swallowed its last word (traps 2:36). So
-each piece gets SILENCE_PAD on top of its share, synthesize_f5 trims
-each piece's own silence away (audio_utils.speech_bounds, the rule
-assemble trims by) and joins the pieces with a short natural gap; the
-speech then lasts the plan to within trim error — no
-measure-and-resynthesize loop is needed. A small per-piece floor
-keeps «Да.» from being clipped.
+Rule: a dubbed line lasts as long as the ORIGINAL line (lip sync),
+bounded to a plausible tempo — never faster than PACE_MAX (F5 is never
+asked to articulate above it; a long translation overruns into the
+slot and assemble's atempo takes the rest), never slower than PACE_MIN.
+The plan is an exact fix_duration per piece: F5 budgets by UTF-8 BYTES
+(Cyrillic = 2/char, so it gave every Russian line ~1.9x) and sings any
+piece under 10 bytes at speed 0.3 — fix_duration bypasses both. Each
+piece is over-asked by SILENCE_PAD (F5 paints silence around every
+call), trimmed back (audio_utils.speech_bounds) and rejoined with
+PIECE_GAP. Constants are hypotheses from the traps clip until they hold
+on baseline20 and a full episode (s25).
 """
 import re
 

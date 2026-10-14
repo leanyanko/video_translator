@@ -72,10 +72,7 @@ def slot_ends(segments: list) -> dict:
     so the two stages cannot disagree again: assemble used to count
     every paste as a slot end, so a 0.5 s "mm-hmm" dropped into an 11 s
     line cut its slot to the floor and sped it up 1.35x for nothing.
-    Count rule, e1v6: 121/817 dubbed lines had an OTHER-speaker paste
-    as the next sequential item before the next voiced line (46 more
-    had a same-speaker paste there, which correctly still ends the
-    slot; tracker s16)."""
+    Measured impact and count rule: docs/pacing.md (tracker s16)."""
     timeline = sorted((s for s in segments
                        if not s.get("echo") and not s.get("overlap")),
                       key=lambda s: s["start"])

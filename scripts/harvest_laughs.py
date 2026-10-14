@@ -168,10 +168,9 @@ LAUGH_WORDS_MAX = 2  # a laugh may carry a word or two («yeah», «oh no»)
 
 def is_speech_leak(words: list, panns_laugh: float) -> bool:
     """Should this candidate be refused as speech? Any real words — unless
-    it is a short exclamation INSIDE something PANNs hears as laughter:
-    Misha's snicker at the Nobel-committee joke (traps 101.9 s, Snicker
-    0.27) came back from whisper as «Yeah.» and was lost on the first
-    pass. Three or more words are a phrase whatever PANNs says."""
+    it is a short exclamation INSIDE something PANNs hears as laughter (a
+    snicker whisper transcribes as «Yeah.» is still a laugh). Three or
+    more words are a phrase whatever PANNs says. TODO #13 belt (b)."""
     if not words:
         return False
     return len(words) > LAUGH_WORDS_MAX or panns_laugh < LAUGH_PANNS_THR
@@ -180,11 +179,10 @@ def is_speech_leak(words: list, panns_laugh: float) -> bool:
 def is_bleed(heard: list, others: list, share: float = 0.5) -> bool:
     """Are the words heard in this mic the words ANOTHER speaker was
     transcribed saying at that moment? Then it is his voice bleeding
-    in, not a hole in the transcript. Time overlap alone cannot tell:
-    two people talking at once is normal, so the test is on the words
-    — at least `share` of the heard tokens must appear in the other
-    speakers' words (traps clip: «Did you do the same with the YPCR?»
-    on Dan's mic vs Misha's «...with the YBCO superconductor?»)."""
+    in, not a hole in the transcript. Time overlap alone cannot tell
+    (two people talking at once is normal), so the test is on the
+    words: at least `share` of the heard content words must appear in
+    the other speakers' segments. TODO #13 belt (b)."""
     norm = lambda w: re.sub(r"[^\w]+", "", w.lower())  # noqa: E731
     # function words match anyone («and», «is», «the»): judge on content
     # words when there are any
@@ -319,9 +317,9 @@ def main() -> None:
         if wt.exists():
             lang = json.loads(wt.read_text()).get("language")
         # other speakers' words come from the FILTERED segments: the raw
-        # per-track words still carry cross-mic echo (Dan's sentence
-        # transcribed on Mike's stem), which would make Dan's own
-        # untranscribed speech look like "someone else's words"
+        # per-track words still carry cross-mic echo (one speaker's
+        # sentence transcribed on another's stem), which would make his
+        # own untranscribed speech look like "someone else's words"
         sp = work / "segments.json"
         said = json.loads(sp.read_text())["segments"] if sp.exists() else []
         kept = []
@@ -344,9 +342,8 @@ def main() -> None:
                          "panns_laugh": round(f.get("_panns_laugh", 0.0), 2)})
                 continue
             # whisper's own confidence: on noise/bleed it hallucinates a
-            # different phrase every run («Perché chills», «It's an
-            # action man») at a low avg_logprob — the doctor treats
-            # those as unclear (WARN), confident words as a FAIL
+            # different phrase every run at a low avg_logprob — the
+            # doctor treats those as unclear (WARN), confident words FAIL
             segs_w = r.get("segments") or []
             logprob = (sum(s.get("avg_logprob", 0.0) for s in segs_w)
                        / len(segs_w)) if segs_w else 0.0

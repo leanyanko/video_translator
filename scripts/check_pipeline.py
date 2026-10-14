@@ -305,13 +305,15 @@ if ru is not None and tts.exists():
         qcj = jload(qc_path)
         flagged = sorted((k for k, v in qcj.items() if v.get("flags")), key=int)
         rerolled = (work / "reroll_report.json").exists()
-        if flagged:
+        # one message per clip, so a doctor_accept entry can match exactly
+        # one clip (an aggregated line let one acceptance cover them all)
+        for k in flagged:
             (warn if pre_synth or not rerolled else fail)(
-                "tts", f"{len(flagged)} clip(s) flagged by QC"
-                + (" after re-roll" if rerolled else " (reroll_qc.py not run yet)")
-                + ": " + "; ".join(f"seg {k} {','.join(qcj[k]['flags'])} sim "
-                                   f"{qcj[k].get('sim', 0):.2f}" for k in flagged[:10])
-                + " — fix the line (text, reference) or accept on record")
+                "tts", f"seg {k} {','.join(qcj[k]['flags'])} sim "
+                       f"{qcj[k].get('sim', 0):.2f} «{qcj[k].get('heard', '')[:60]}» "
+                       f"— flagged by QC"
+                       + (" after re-roll" if rerolled else " (reroll_qc.py not run yet)")
+                       + "; fix the line (text, reference) or accept on record")
 
 # ── orig files ──────────────────────────────────────────────────────
 PASTE_MAX_SECS = 4.0  # sec; laughs measured 0.7-3 s on exp_traps_v3/e1v6
