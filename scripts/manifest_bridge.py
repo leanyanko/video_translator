@@ -154,16 +154,25 @@ def old_hash(speaker: str, text: str) -> str:
 
 
 def ref_hasher(refs_dir: Path):
-    """spk -> 12-hex sha1 of refs_dir/<spk>.wav ("noref" if absent), cached.
-    The same function object must be used for one manifest comparison
-    (synthesize_f5.py and check_pipeline.py each build one)."""
+    """spk -> 12-hex sha1 of refs_dir/<spk>.wav AND <spk>.txt ("noref" if
+    the wav is absent), cached. The text is part of the fingerprint
+    because F5 conditions on the (audio, text) pair: a reference whose
+    text was edited sings differently — without this, fixing a mismatched
+    .txt (the s7 doctor FAIL) re-sang nothing and the clips sung with the
+    wrong text stayed "fresh" (s28). The same function object must be
+    used for one manifest comparison (synthesize_f5.py and
+    check_pipeline.py each build one)."""
     cache = {}
 
     def ref_sha(spk: str) -> str:
         if spk not in cache:
             p = Path(refs_dir) / f"{spk}.wav"
-            cache[spk] = (hashlib.sha1(p.read_bytes()).hexdigest()[:12]
-                          if p.exists() else "noref")
+            if not p.exists():
+                cache[spk] = "noref"
+            else:
+                txt = Path(refs_dir) / f"{spk}.txt"
+                text = txt.read_text().strip().encode("utf-8") if txt.exists() else b""
+                cache[spk] = hashlib.sha1(p.read_bytes() + b"\n" + text).hexdigest()[:12]
         return cache[spk]
 
     return ref_sha

@@ -213,19 +213,35 @@ def main() -> None:
     run("synthesize_f5 via supervisor",
         ["zsh", SCRIPTS / "synth_supervisor.sh", work])
 
+    sys.path.insert(0, str(SCRIPTS))
+    from cli_args import opt as _opt
+    tail(work, multitrack, restore=_opt("--restore-sounds", "laughs"),
+         reroll="--no-reroll" not in sys.argv)
+
+
+def harvest_due(prev_stamp, stamp: str, has_auto_pastes: bool, restore: str) -> bool:
+    """Run harvest when the mode/timings stamp changed — or when the dir
+    has no auto pastes at all while restore is on (a `--restore-sounds
+    none` run leaves a stamp that used to skip the next laughs run: the
+    full episode shipped without pastes or the speech check, d10)."""
+    return prev_stamp != stamp or (restore != "none" and not has_auto_pastes)
+
+
+def tail(work: Path, multitrack: bool, restore: str = "laughs", reroll: bool = True) -> None:
+    """Everything after synthesis — ONE tail for run_pipeline and redub
+    (d10): QC → re-roll of flagged clips → non-speech restore with the
+    speech check (multitrack) → doctor → assemble with the music stem →
+    H.264. redub used to skip every gate here."""
     run("qc: back-transcribe every clip",
         [PY, SCRIPTS / "qc_tts.py", work])
     # F5 renders the same line differently from run to run; QC hears the
     # gross failures. Flagged / low-sim clips are re-sung up a short
     # ladder and kept only when QC improves (reroll_qc.py, d6).
-    if "--no-reroll" not in sys.argv:
+    if reroll:
         run("qc re-roll of flagged clips",
             [PY, SCRIPTS / "reroll_qc.py", work])
 
     if multitrack:
-        sys.path.insert(0, str(SCRIPTS))
-        from cli_args import opt as _opt
-        restore = _opt("--restore-sounds", "laughs")
         import hashlib as _hl
         _ru = json.loads((work / "segments_ru.json").read_text())["segments"]
         _spans = sorted((s["speaker"], round(s["start"], 2), round(s["end"], 2))
@@ -233,7 +249,7 @@ def main() -> None:
         stamp = f"{restore}:" + _hl.sha1(repr(_spans).encode()).hexdigest()[:12]
         mode_file = work / "laughs" / ".mode"
         prev = mode_file.read_text().strip() if mode_file.exists() else None
-        if prev != stamp:  # mode changed OR speech timings edited
+        if harvest_due(prev, stamp, any(s.get("auto_track") for s in _ru), restore):
             run(f"restore non-speech sounds off the raw stems ({restore})",
                 [PY, SCRIPTS / "harvest_laughs.py", work,
                  "--restore-sounds", restore])
@@ -256,9 +272,8 @@ def main() -> None:
                          work / "video_ru_h264.mp4"])
     save_timings(work)
     print(f"\nDONE: {work}/video_ru_h264.mp4 (watch) and video_ru.mp4 (upload)")
-    print("Flagged clips from the qc step (if any) are listed in qc_tts_f5.json —")
-    print("fix with synthesize_f5.py --only <ids> --seed 7 and rerun this command.")
-
+    print("Clips still flagged after the re-roll are listed in qc_tts_f5.json / "
+          "reroll_report.json — fix the line or accept on record, then rerun.")
 
 if __name__ == "__main__":
     main()

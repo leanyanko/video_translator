@@ -28,7 +28,10 @@ two-line edit re-synthesizes two clips, never the whole dir, and an
 edited line can never be passed off as fresh. --adopt-existing remains
 only for hand-copied clips with no record; --seed N is forwarded.
 
-Produces video_ru.mp4 and video_ru_h264.mp4, and exports transcripts.
+Then runs run_pipeline's shared tail (d10): QC, re-roll of flagged clips,
+non-speech restore with the speech check, the doctor (aborts on
+failures), assemble with the music stem, H.264 — and exports transcripts.
+A re-voiced line passes every gate a fresh run does.
 """
 import json
 import shutil
@@ -111,15 +114,14 @@ def main() -> None:
     run("synthesize (missing/changed only, per tts_f5/manifest.json)",
         [PY_F5, SCRIPTS / "synthesize_f5.py", work] + synth_flags)
 
-    run("assemble", [PY, SCRIPTS / "assemble.py", work,
-                     "--tts-dir", "tts_f5", "--out", "video_ru.mp4"])
-    run("H.264 encode", ["ffmpeg", "-y", "-v", "error",
-                         "-i", work / "video_ru.mp4",
-                         "-c:v", "h264_videotoolbox", "-b:v", "6000k",
-                         "-c:a", "copy", "-movflags", "+faststart",
-                         work / "video_ru_h264.mp4"])
+    # the SAME tail as run_pipeline (d10): QC, re-roll, non-speech restore
+    # with the speech check, doctor, assemble with the music stem, H.264 —
+    # a re-voiced line passes every gate a fresh run does
+    sys.path.insert(0, str(SCRIPTS))
+    from run_pipeline import tail
+    tail(work, multitrack=(work / "tracks.json").exists(),
+         reroll="--no-reroll" not in args)
     run("export transcripts", [PY, SCRIPTS / "export_transcripts.py", work])
-    print(f"\nDONE: {work}/video_ru_h264.mp4")
 
 
 if __name__ == "__main__":

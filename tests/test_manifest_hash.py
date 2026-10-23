@@ -16,12 +16,17 @@ class TestHashes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             refs = Path(td)
             (refs / "S0.wav").write_bytes(b"abc")
+            (refs / "S0.txt").write_text("hello\n")
             rs = ref_hasher(refs)
-            self.assertEqual(rs("S0"), hashlib.sha1(b"abc").hexdigest()[:12])
+            # wav AND text (s28): F5 conditions on the pair
+            self.assertEqual(rs("S0"), hashlib.sha1(b"abc\nhello").hexdigest()[:12])
             self.assertEqual(rs("S9"), "noref")
             (refs / "S0.wav").write_bytes(b"changed")
-            self.assertEqual(rs("S0"), hashlib.sha1(b"abc").hexdigest()[:12])  # cached per comparison
-            self.assertNotEqual(ref_hasher(refs)("S0"), rs("S0"))            # a new hasher sees the change
+            self.assertEqual(rs("S0"), hashlib.sha1(b"abc\nhello").hexdigest()[:12])  # cached per comparison
+            self.assertNotEqual(ref_hasher(refs)("S0"), rs("S0"))                  # a new hasher sees the change
+            (refs / "S0.wav").write_bytes(b"abc")
+            (refs / "S0.txt").write_text("hello yeah\n")
+            self.assertNotEqual(ref_hasher(refs)("S0"), rs("S0"))  # an edited text is a new reference
 
     def test_seg_hash_uses_accented_text_then_text_ru(self):
         rs = lambda spk: "r" + spk  # noqa: E731

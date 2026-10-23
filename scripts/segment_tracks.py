@@ -26,7 +26,6 @@ import json
 import re
 import subprocess
 import sys
-from difflib import SequenceMatcher
 from pathlib import Path
 
 from cli_args import opt
@@ -38,18 +37,16 @@ from segmenting import (GAP_BREAK, MAX_PAUSE, MAX_SENT_SECS, SENT_END,
                         TARGET_SECS, build_sentences, merge_short,
                         runon_cut_ids, split_long_flagged, words_text)
 
-# cross-track housekeeping (none of this exists in the mix flow):
-ECHO_DT = 0.7        # sec; same text within this start offset = mic bleed
-ECHO_SIM = 0.8       # text similarity to call two segments the same phrase
+# cross-track housekeeping (none of this exists in the mix flow).
+# Deleted 10-23 (CLAUDE.md §3, tracker d7): the mic-bleed echo dedupe and
+# the quiet-hallucination drop caught 0 segments on all three regression
+# sets (traps / baseline20 / e1v7: 0/0/0 and 0/0/0) — the word-level bleed
+# filter and cross-track echo upstream already remove what they targeted.
 # non-verbal vocalizations are language-independent: pasted from the solo
 # stem as type:"orig" instead of being translated and synthesized
 NONVERBAL = re.compile(r"^[-\s.,!?…]*(?:(?:m+[-\s]?h?m+|h+m+|uh[-\s]?huh|mhm+|ha(?:[-\s]?ha)+)[-.!?,…\s]*)+$", re.I)
 ECHO_FRAG_WORDS = 0.7   # share of words found in neighbours' speech
 ECHO_FRAG_RMS = 0.5     # of the speaker's median segment RMS
-# classic whisper hallucinations on breath islands — dropped when quiet
-HALLUCINATIONS = {"thank you.", "thanks for watching.", "thank you for watching.",
-                  "subscribe!", "thanks."}
-QUIET_FRACTION = 0.25  # of the speaker's median segment RMS
 
 work = Path(sys.argv[1])
 min_overlap = opt("--min-overlap", 0.3, float)
@@ -175,23 +172,7 @@ for spk in {s["speaker"] for s in segments}:
 print(f"{dropped_orphan} orphan fragments (gap-split bleed strays) dropped")
 segments.sort(key=lambda s: (s["start"], s["end"]))
 
-# 1. mic-bleed echo dedupe: the same phrase heard on two stems at the
-#    same moment was said once — keep the louder reading, drop the bleed
-dropped_echo = []
-for i, a in enumerate(segments):
-    if a.get("_drop"):
-        continue
-    for b in segments[i + 1:]:
-        if b["start"] - a["start"] > ECHO_DT:
-            break
-        if (b.get("_drop") or b["speaker"] == a["speaker"]):
-            continue
-        if SequenceMatcher(None, a["text"].lower(), b["text"].lower()).ratio() >= ECHO_SIM:
-            loser = a if a["_rms"] < b["_rms"] else b
-            loser["_drop"] = True
-            dropped_echo.append(loser)
-
-# 1b. echo FRAGMENTS: bleed loud enough to pass the word filter comes
+# 1. echo FRAGMENTS: bleed loud enough to pass the word filter comes
 #     out as a quiet collage of the neighbours' words — if most of a
 #     segment's words occur in other speakers' speech nearby and the
 #     segment is much quieter than its speaker's norm, it is bleed too
@@ -215,19 +196,9 @@ for s in segments:
         s["_drop"] = True
         dropped_frag.append(s)
 
-# 2. whisper hallucinations on breath islands: known phrases, quiet on
-#    the stem relative to that speaker's own median loudness
-dropped_halluc = []
-for s in segments:
-    if (not s.get("_drop")
-            and s["text"].strip().lower() in HALLUCINATIONS
-            and s["_rms"] < QUIET_FRACTION * med[s["speaker"]]):
-        s["_drop"] = True
-        dropped_halluc.append(s)
-
 segments = [s for s in segments if not s.get("_drop")]
 
-# 3. non-verbal vocalizations (mm-hmm, hmm, laughter-as-text): paste the
+# 2. non-verbal vocalizations (mm-hmm, hmm, laughter-as-text): paste the
 #    original sound from the solo stem instead of synthesizing it
 # whisper confidence (words carry "prob" since transcribe_tracks.py kept
 # it): short low-confidence lines are crosstalk/quiet backchannels that
@@ -326,9 +297,7 @@ for s in segments:
 for s in segments:
     s.pop("_rms", None)
 
-print(f"housekeeping: {len(dropped_echo)} mic-bleed echoes + "
-      f"{len(dropped_frag)} echo fragments dropped, "
-      f"{len(dropped_halluc)} hallucinations dropped, "
+print(f"housekeeping: {len(dropped_frag)} echo fragments dropped, "
       f"{n_nonverbal} non-verbal segments pasted from stems, "
       f"{n_lowconf} low-confidence lines pasted from stems, "
       f"{n_flagged} flagged low_conf for the translator")
