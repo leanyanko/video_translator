@@ -50,7 +50,7 @@ class TestMakeRefs(unittest.TestCase):
              "-ac", "1", "-ar", "44100", str(cls.work / "audio.wav")])
         r = subprocess.run(
             [sys.executable, str(SCRIPT), str(cls.work),
-             "--max-secs", "11.5", "--outdir", "refs_f5"],
+             "--max-secs", "11.5", "--outdir", "refs_f5", "--no-asr"],  # sine fixture: no speech to transcribe
             capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         cls.refs = cls.work / "refs_f5"

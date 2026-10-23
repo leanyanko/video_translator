@@ -17,7 +17,9 @@ Checks, in pipeline order (multitrack checks are skipped in mix mode):
   translate  segments_ru.json covers every speech segment; budget outliers
   accents    accents.json covers every speech segment AND matches the
              CURRENT text_ru (stale accents sing the old text — e1v5 bug)
-  refs       one wav+txt per speaker; 4-11.6 s; head silence <=0.3 s
+  refs       one wav+txt per speaker; 4-11.6 s; head silence <=0.3 s; the
+             text matches a back-transcription of the audio (s7; cached in
+             <spk>.check.json); slow sample / long tail = warnings
   tts        every speech segment has a clip; manifest.json hash matches
              speaker|accents|ref (stale clip = old text with old voice);
              no clip left flagged by QC after reroll_qc.py (FAIL before
@@ -78,7 +80,8 @@ def warn(stage, msg):
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stress_rules import force_name_stress  # noqa: E402
-from pacing import PACE_MAX  # noqa: E402  the translator's chars/s budget (s23)
+from pacing import PACE_MAX, PACE_MIN  # noqa: E402  tempo bounds (s23, s27)
+from ref_check import REF_TAIL_WARN, slow_references  # noqa: E402
 from manifest_bridge import (  # noqa: E402
     load_or_bridge, missing_clips, ref_hasher, seg_hash, stale_ids, voiced)
 
@@ -224,6 +227,13 @@ if ru is not None:
 refs = work / ("refs_f5" if (work / "refs_f5").exists() else "refs")
 if ru is not None:
     from audio_utils import audition, decode
+    _lang = None
+    for _wf in ("words_tracks.json", "words.json", "segments.json"):
+        if (work / _wf).exists():
+            _lang = jload(work / _wf).get("language") or _lang
+            if _lang:
+                break
+    _ref_tempo = {}
     for spk in sorted({s["speaker"] for s in ru if s.get("type") != "orig"}):
         wav, txt = refs / f"{spk}.wav", refs / f"{spk}.txt"
         if not wav.exists() or not txt.exists():
@@ -246,6 +256,31 @@ if ru is not None:
             if head > 0.3:
                 fail("refs", f"{spk}.wav: {head:.2f}s of silence before speech "
                              "— F5 will paint the same junk into every clip")
+        # the text must say what the audio says (s7, ref_check): a mismatch
+        # makes F5 "finish" the reference at the start of every clip (QC
+        # LEAD, silent short lines — baseline20 10-13). Cached per
+        # wav/txt mtime so the doctor does not re-transcribe every run.
+        cache = refs / f"{spk}.check.json"
+        stamp = [wav.stat().st_mtime, txt.stat().st_mtime]
+        v = jload(cache) if cache.exists() else {}
+        if v.get("stamp") != stamp:
+            from ref_check import check_reference, whisper_transcribe
+            heard, last = whisper_transcribe(wav, _lang)
+            v = dict(check_reference(txt.read_text(), heard, last, dur), stamp=stamp)
+            cache.write_text(json.dumps(v, ensure_ascii=False, indent=1))
+        if not v["ok"]:
+            fail("refs", f"{spk}.txt does not match the audio ({v['match']:.0%} word "
+                         f"match): heard «{v['heard'][:80]}» — rewrite the .txt "
+                         "from this transcription or re-cut the reference (s7)")
+        if v["tail"] > REF_TAIL_WARN:
+            warn("refs", f"{spk}.wav runs {v['tail']:.2f}s past the last word — "
+                         "trim the cut closer to the speech")
+        _ref_tempo[spk] = v["chars_per_sec"]
+    # slow sample = slow clone (s27): relative to the other speakers' references
+    for spk in slow_references(_ref_tempo, PACE_MIN):
+        warn("refs", f"{spk}: slow reference ({_ref_tempo[spk]:.1f} chars/s vs "
+                     f"{ {k: v for k, v in _ref_tempo.items() if k != spk} }) — F5 "
+                     "clones the drawl; re-cut from a fluent moment")
 
 # ── tts + manifest ──────────────────────────────────────────────────
 tts = work / "tts_f5"

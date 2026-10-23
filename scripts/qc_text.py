@@ -87,26 +87,68 @@ def ru_num_words(n: int) -> list:
     return out
 
 
-def words(t: str) -> list:
+# Latin letters as Russian says them: whisper writes «CD», the script
+# spells «си-ди» (the way the translator must write acronyms for F5)
+_LATIN_LETTER = {"a": "эй", "b": "би", "c": "си", "d": "ди", "e": "и", "f": "эф",
+                 "g": "джи", "h": "эйч", "i": "ай", "j": "джей", "k": "кей",
+                 "l": "эл", "m": "эм", "n": "эн", "o": "оу", "p": "пи", "q": "кью",
+                 "r": "ар", "s": "эс", "t": "ти", "u": "ю", "v": "ви", "w": "дабл ю",
+                 "x": "экс", "y": "уай", "z": "зед"}
+# function words whisper drops on a one-word clip («А дальше?» → «дальше»)
+_SHORT_STOP = {"а", "в", "и", "о", "у", "с", "к", "но", "то", "же", "ну", "вот", "так"}
+SHORT_SCRIPT_WORDS = 3
+
+
+def words(t: str, raw: str | None = None) -> list:
     """Comparison word list: stress marks stripped, ё→е, lowercase,
-    digit runs expanded into Russian number words."""
+    digit runs expanded into Russian number words, short Latin acronyms
+    spelled letter by letter («CD» → «си ди»; `raw` is the original-case
+    text, needed to tell an acronym from a Latin word)."""
+    src = raw if raw is not None else (t or "")
     t = (t or "").replace("+", "").lower().replace("ё", "е")
+    acronyms = {m.lower() for m in re.findall(r"\b[A-Z]{2,5}\b", src)}
     out = []
     for tok in re.findall(r"[а-яa-z]+|\d+", t):
         if tok.isdigit():
             out += ru_num_words(int(tok))
+        elif tok in acronyms:
+            out += " ".join(_LATIN_LETTER.get(c, c) for c in tok).split()
         else:
             out.append(tok)
     return out
 
 
+def stem(w: str) -> str:
+    """Crude Russian stem: a word of 6+ letters minus its last 3 — enough
+    to pair inflections («крайние/крайний», «компенсируют/компенсирует»);
+    shorter words are compared whole. QC leniency only: used as the
+    'best of' alongside the exact match, so it can never lower a score."""
+    return w[:-3] if len(w) >= 6 and re.fullmatch(r"[а-я]+", w) else w
+
+
+def _ratio(a: list, b: list) -> float:
+    if not a:
+        return 0.0
+    exact = SequenceMatcher(None, a, b).ratio()
+    stemmed = SequenceMatcher(None, [stem(x) for x in a], [stem(x) for x in b]).ratio()
+    return max(exact, stemmed)
+
+
 def script_sim(heard: str, sung: str, plain: str):
     """(similarity, heard_words, sung_words) — similarity is the best of
-    heard-vs-sung and heard-vs-plain; sung_words sizes the EXTRA check
-    (that is the text the clip was synthesized from)."""
-    heard_w, sung_w = words(heard), words(sung)
-    sim = SequenceMatcher(None, sung_w, heard_w).ratio() if sung_w else 0.0
-    plain_w = words(plain)
-    if plain_w and plain_w != sung_w:
-        sim = max(sim, SequenceMatcher(None, plain_w, heard_w).ratio())
+    heard-vs-sung and heard-vs-plain, each the best of exact and
+    stem-level word matching; on a script of <= SHORT_SCRIPT_WORDS words
+    the function words whisper drops on tiny clips are ignored on both
+    sides. sung_words sizes the EXTRA check (that is the text the clip
+    was synthesized from)."""
+    heard_w, sung_w = words(heard, heard), words(sung, sung)
+    plain_w = words(plain, plain)
+    variants = [sung_w] + ([plain_w] if plain_w and plain_w != sung_w else [])
+    sim = max((_ratio(v, heard_w) for v in variants), default=0.0)
+    if sung_w and len(sung_w) <= SHORT_SCRIPT_WORDS:
+        hs = [w for w in heard_w if w not in _SHORT_STOP]
+        for v in variants:
+            vs = [w for w in v if w not in _SHORT_STOP]
+            if vs:
+                sim = max(sim, _ratio(vs, hs))
     return sim, heard_w, sung_w
